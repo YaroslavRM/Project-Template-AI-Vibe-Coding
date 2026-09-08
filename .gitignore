@@ -1,0 +1,52 @@
+# Інструменти розробки — ніколи не комітяться.
+# Саме tmpBin/* , а не tmpBin/ : git не вміє re-include файл усередині
+# виключеної директорії, і тоді !tmpBin/.gitkeep не спрацьовує.
+tmpBin/*
+!tmpBin/.gitkeep
+
+# Середовища
+.env
+.env.*
+!.env.example
+*.local
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-error.log*
+.next/
+.turbo/
+
+# Збірки
+dist/
+build/
+target/
+*.egg-info/
+
+# Тести й покриття
+coverage/
+.coverage
+htmlcov/
+
+# Локальні налаштування агентів
+.claude/settings.local.json
+CLAUDE.local.md
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Логи, тимчасове
+*.log
+tmp/

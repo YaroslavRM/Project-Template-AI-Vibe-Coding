@@ -1,0 +1,28 @@
+#!/bin/sh
+# Traceability: кожен коміт посилається на ID вимоги або задачі.
+# Приймаються префікси: FR | DR | NFR | IR | TASK | SLICE, рівно три цифри.
+# ID шукається ТІЛЬКИ в першому рядку — у тілі коміту він не зараховується.
+# Вмикається вручну: git config core.hooksPath .githooks
+# Обійти свідомо: git commit --no-verify
+
+msg=$(sed -e '/^#/d' -e '/^$/d' "$1" | head -1)
+
+case "$msg" in
+  "Merge "*|"Revert "*) exit 0 ;;
+esac
+
+if ! printf '%s' "$msg" | grep -qE '^(feat|fix|refactor|test|docs|chore|build|ci|revert)(\([a-z0-9-]+\))?: '; then
+  echo "commit-msg: очікується '<type>: ...' де type = feat|fix|refactor|test|docs|chore|build|ci|revert"
+  echo "  отримано: $msg"
+  exit 1
+fi
+
+# Межі навколо ID з обох боків: 'FR-014' проходить, 'FR-14', 'FR-0141',
+# 'XFR-014' і 'FR-014-2' — ні.
+if ! printf '%s' "$msg" | grep -qE '(^|[^A-Za-z0-9-])(FR|DR|NFR|IR|TASK|SLICE)-[0-9]{3}([^0-9-]|$)'; then
+  echo "commit-msg: у першому рядку немає ID вимоги або задачі."
+  echo "  приклад: feat: FR-014 фільтр замовлень за статусом"
+  echo "  приклад: chore: TASK-007 оновити залежності"
+  echo "  отримано: $msg"
+  exit 1
+fi

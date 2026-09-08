@@ -1,0 +1,60 @@
+# Хуки клієнтські: `git commit --no-verify` знімає їх повністю, і коміт із
+# чужої машини теж їх не бачив. Це — єдина перевірка, яку не можна обійти
+# локально.
+name: template-check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      # Другий, незалежний примірник контрольної суми.
+      # scripts/integrity.sha256 пінить усі enforcement-файли, але сам маніфест
+      # ним не покритий — інакше вийшло б коло. Тому його хеш зашитий тут.
+      # Наслідок: щоб протягнути змінену перевірку, треба змінити ще й цей
+      # рядок, і воно видно в diff.
+      - name: Manifest pin
+        run: |
+          expected="0d764b036019d36479f12f2163eac1d6dfac2c485bfb73df24902a0aa6d2f04b"
+          actual=$(sha256sum scripts/integrity.sha256 | cut -d' ' -f1)
+          if [ "$expected" != "$actual" ]; then
+            echo "scripts/integrity.sha256 змінився, а пін у цьому workflow — ні."
+            echo "  очікувано: $expected"
+            echo "  фактично:  $actual"
+            echo "Якщо зміна погоджена — онови рядок expected тим самим комітом."
+            exit 1
+          fi
+
+      # Звірка маніфесту штатним sha256sum, незалежно від наших скриптів:
+      # переписаний check-template.py сказав би OK про себе самого.
+      - name: Verify pinned files
+        run: sha256sum -c scripts/integrity.sha256
+
+      # У CI хуки не налаштовані й не потрібні — core.hooksPath задається,
+      # щоб перевірка не падала на пункті, який стосується робочої машини.
+      - name: Set hooks path
+        run: git config core.hooksPath .githooks
+
+      - name: Template integrity
+        run: python3 scripts/check-template.py
+
+      - name: Traceability IDs
+        run: python3 scripts/check-ids.py
+
+      # Правила зберігаються в LF. Якщо в репозиторій просочився CRLF —
+      # хеші зламаються у наступного, хто клонує.
+      - name: Line endings
+        run: |
+          if grep -qU $'\r' RulesForAIVibeCoding.md; then
+            echo "RulesForAIVibeCoding.md містить CRLF — має бути LF (див. .gitattributes)"
+            exit 1
+          fi

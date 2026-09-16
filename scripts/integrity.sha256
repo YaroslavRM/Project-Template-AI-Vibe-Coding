@@ -6,5 +6,5 @@
 ec62df083ae35592a23ae8758721b890209210829ef172e318efbae26dd75f38  .githooks/pre-commit
 93994954e0d524d2fba5651a4b15beed2a7f88b1da6aa495fb56c94c44e72b01  .githooks/commit-msg
 ec0adf28305c46a4a855c0e24f563975745c6ee177a897c9e9fba3b78035ad11  .claude/settings.json
-cb25f8039a3098ac611d35f724aa7cc27e0dd4e17f4726d74c44625214151c2c  .claude/hooks/bash-guard.py
+4419581abc5aae0645cdc0f52c0e51e6db38fb0750b0ee34a6b97838e8810e01  .claude/hooks/bash-guard.py
 01c6002feaeabf576cb4510d4bc8d4e4262fe708491f28c2ed4a465b946a299a  .claude/hooks/stop-integrity.py

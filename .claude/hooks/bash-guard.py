@@ -35,6 +35,10 @@ session showed why: almost every command an agent writes starts with
 `cd … && sha256sum -c scripts/integrity.sha256` into a blocked "write to the
 manifest". That fired on the first command of the session.
 
+The working directory arrives in the payload and is used: `rm scratch.txt`
+typed while the shell is inside tmpBin is the agent tidying up, and the same
+command typed in the project root is not.
+
 Writing this file's own text through a heredoc will trip the guard, because
 the text names the things it blocks. Use the Write tool for that, not Bash.
 """
@@ -172,44 +176,71 @@ def manifest_violation(segs: list[str]) -> str | None:
 # --- deleting ---------------------------------------------------------------
 
 TMPBIN = "tmpBin/"
-RM_HEAD = re.compile(r"^(?:sudo\s+)?rm\b")
+DELETE_HEAD = re.compile(r"^(?:sudo\s+)?(?:rm|unlink|truncate)\b")
+FIND_DELETE = re.compile(r"^(?:sudo\s+)?find\b[\s\S]*?(?:\s-delete\b|-exec\s+rm\b)")
 CD_HEAD = re.compile(r"^cd\s+(?P<path>[^\s;&|]+)")
+WIN_DRIVE = re.compile(r"^[A-Za-z]:")
 
 
-def rm_violation(segs: list[str]) -> str | None:
+def _slash(text: str) -> str:
+    return text.replace("\\", "/")
+
+
+def _under_tmpbin(target: str, cwd_inside: bool) -> bool:
+    target = _slash(target.strip("\"'"))
+    if ".." in target:
+        return False
+    if TMPBIN in target:
+        return True
+    # A relative path while the shell already sits inside tmpBin is inside it
+    # too. This is why the hook reads `cwd` from the payload: without it a bare
+    # `rm scratch.txt` typed in tmpBin was refused as "the owner's file", which
+    # was both wrong and the only real false positive left after the first live
+    # session.
+    return cwd_inside and not target.startswith("/") and not WIN_DRIVE.match(target)
+
+
+def _rm_targets(tokens: list[str]) -> list[str]:
+    return [t for t in tokens if not t.startswith("-")]
+
+
+def _find_roots(tokens: list[str]) -> list[str]:
+    roots: list[str] = []
+    for t in tokens:
+        if t.startswith("-"):
+            break
+        roots.append(t)
+    return roots or ["."]
+
+
+def delete_violation(segs: list[str], cwd: str) -> str | None:
     """Deleting is the owner's, except inside the agent's own scratch folder.
 
-    The exemption used to require the whole command to be exactly an rm of a
-    tmpBin path. In a live session that meant the declared permission worked in
-    one syntactic form only: not after `cd … &&`, not before `&& echo`, and not
-    at all once the shell was already inside tmpBin. It is now decided per
-    segment, and a preceding `cd` into tmpBin counts.
+    Covers rm, unlink, truncate and `find -delete`, because they differ only in
+    spelling. The exemption is decided per segment, and follows a `cd` into
+    tmpBin as well as the shell's starting directory.
     """
-    in_tmpbin = False
+    inside = TMPBIN in _slash(cwd)
     for seg in segs:
         plain = unquoted(seg)
         cd = CD_HEAD.match(plain)
         if cd:
-            in_tmpbin = TMPBIN in cd.group("path")
+            path = cd.group("path")
+            inside = TMPBIN in _slash(path) or (inside and not path.startswith(("/", "~")))
             continue
-        if not RM_HEAD.match(plain):
+        tokens = plain.split()[1:]
+        if FIND_DELETE.match(plain):
+            targets = _find_roots(tokens)
+        elif DELETE_HEAD.match(plain):
+            targets = _rm_targets(tokens[1:] if tokens[:1] == ["rm"] else tokens)
+        else:
             continue
-        targets = [
-            t for t in plain.split()[1:]
-            if not t.startswith("-") and t not in ("sudo", "rm")
-        ]
-        if not targets:
-            continue
-        safe = all(
-            ".." not in t and (TMPBIN in t or (in_tmpbin and not t.startswith("/")))
-            for t in targets
-        )
-        if safe:
+        if not targets or all(_under_tmpbin(t, inside) for t in targets):
             continue
         return (
             "deleting files the owner did not ask you to delete. Name what you "
             "want removed and why, and let the owner run it. Cleaning up your own "
-            "scratch under tmpBin/ is allowed."
+            "scratch under tmpBin/ is allowed — rm, unlink and find -delete alike."
         )
     return None
 
@@ -276,11 +307,6 @@ TEXT_RULES: list[tuple[re.Pattern[str], str]] = [
 # --cached x && git status --short` was blocked for the r in --short.
 PER_SEGMENT: list[tuple[re.Pattern[str], str]] = [
     (
-        re.compile(r"^(?:sudo\s+)?find\b[\s\S]*?(?:\s-delete\b|-exec\s+rm\b)"),
-        "find -delete (or -exec rm) is a recursive delete wearing a different "
-        "name. Same answer as rm.",
-    ),
-    (
         # `git rm file` deletes from the working tree; --cached only unstages.
         re.compile(r"^git\s+rm\b(?![\s\S]*--cached\b)"),
         "git rm removes the file from disk, not just from the index. Use "
@@ -301,6 +327,7 @@ PER_SEGMENT: list[tuple[re.Pattern[str], str]] = [
         re.compile(
             r"^git\s+(?:reset\s+--hard\b"
             r"|clean\s+[\s\S]*?(?:-[A-Za-z]*[fd][A-Za-z]*|--force\b)"
+            r"|stash\s+(?:drop|clear)\b"
             r"|restore\s+(?![\s\S]*?--staged\b))"
         ),
         "this discards uncommitted work irreversibly. Ask first.",
@@ -318,13 +345,17 @@ def main() -> int:
     if not command:
         return 0
 
+    # PreToolUse hands the shell's working directory over; without it a bare
+    # `rm scratch.txt` typed inside tmpBin cannot be told from one typed in the
+    # project root.
+    cwd = str(payload.get("cwd", "") or "")
     nq = unquoted(command)
     segs = segments(command)
 
     reason = (
         env_violation(command, nq)
         or manifest_violation(segs)
-        or rm_violation(segs)
+        or delete_violation(segs, cwd)
     )
 
     if reason is None:

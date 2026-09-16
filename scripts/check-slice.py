@@ -80,12 +80,24 @@ TEST_NAME = re.compile(
 TEST_DIRS = {"test", "tests", "spec", "specs", "__tests__", "testing"}
 # A line that gives a test its name. Given/When/Then are step text, not names,
 # so they are not here: an ID in a step is a comment by another spelling.
+MODIFIERS = (
+    r"(?:public|private|protected|internal|static|final|async|override|virtual"
+    r"|partial|export|pub|open|suspend)"
+)
 TEST_DECL = re.compile(
-    r"^\s*(?:[-*]\s*)?(?:@\w+\s+)?"
-    r"(?:(?:public|private|protected|internal|static|final|async|export|pub|open)\s+)*"
-    r"(?:def|fn|func|function|class|struct|module|it|test|describe|context|specify"
-    r"|Scenario(?:\s+Outline)?|Feature|Example)\b"
-    r"|^\s*(?:it|test|describe|context)\s*\(",
+    r"^\s*(?:[-*]\s*)?(?:@\w+\s+)?(?:"
+    # def / fn / fun / func / function / class / it / test / Scenario ...
+    rf"(?:{MODIFIERS}\s+)*"
+    r"(?:def|fn|fun|func|function|class|struct|module|it|test|describe|context"
+    r"|specify|Scenario(?:\s+Outline)?|Feature|Example)\b"
+    # C#, Java, Kotlin: modifiers, then a return type, then the name.
+    # `public void FR_003_Listing()`, `public async Task FR_003_Listing()`.
+    # At least one modifier is required, so an ordinary call is not a
+    # declaration.
+    rf"|(?:{MODIFIERS}\s+)+[\w<>\[\],.\s]+?\s+[`\w]+\s*\("
+    # Jest and friends: it.only(, test.each(, describe.skip(
+    r"|(?:it|test|describe|context)(?:\.\w+)*\s*\("
+    r")",
     re.IGNORECASE,
 )
 TEXT_SUFFIXES = {

@@ -184,10 +184,9 @@ def main() -> int:
         check(not unknown, f"all requirement IDs exist in FRS ({', '.join(unknown) or 'ok'})")
 
         # The rules require the test name to carry the FR-ID or an AC-ID of it.
-        frs_acs_for = {
-            req: [ac for ac in set(AC_ID.findall(frs_text)) if _ac_near(frs_text, ac, req)]
-            for req in claimed
-        }
+        frs_acs_for = {req: _acs_for(frs_text, req) for req in claimed}
+        for line in _unmapped_acs(frs_text):
+            print(f"WARN:  {line}")
         # One file at a time, stopping once every requirement is accounted for.
         # The previous version concatenated all of source/ into a single string,
         # which read hundreds of megabytes of vendored dependencies for nothing
@@ -254,18 +253,54 @@ def _mentions(text: str, ident: str) -> bool:
     return re.search(rf"(?<![A-Za-z0-9]){prefix}[-_]?{number}(?![0-9])", text) is not None
 
 
-def _ac_near(text: str, ac: str, req: str, window: int = 400) -> bool:
-    """True when the AC-ID appears within a window of the requirement ID.
+def _acs_for(text: str, req: str) -> list[str]:
+    """Acceptance criteria that belong to a requirement: same line, both IDs.
 
-    Crude on purpose: it needs no knowledge of how the FRS lays out its
-    acceptance criteria, and it is only used to widen a check, never to fail
-    one that would otherwise pass.
+    This replaced a proximity window of 400 characters. The window looked
+    harmless — it only ever widened the check — but it was wrong in the format
+    this template asks for. prompts/01-ba-interview.md requires a Traceability
+    Matrix, whose rows put every FR-ID within a few characters of every
+    neighbouring AC-ID, so the window returned true for nearly every pair no
+    matter how long the document was. The line "every claimed requirement
+    appears in source/" then meant only "some test mentions some AC".
+
+    A shared line is what the format already produces where the mapping is
+    real: a heading like `### AC-001 (FR-001)`, and a matrix row
+    `| FR-001 | … | AC-001 |`. Both name the correct pair; neither creates a
+    false one.
+
+    This is stricter than the window, on purpose. An AC that no line ties to a
+    requirement widens nothing, and _unmapped_acs() says so out loud rather
+    than letting the check quietly tighten.
     """
-    for m in re.finditer(re.escape(ac), text):
-        chunk = text[max(0, m.start() - window): m.start() + window]
-        if req in chunk:
-            return True
-    return False
+    out: set[str] = set()
+    for line in text.splitlines():
+        if req in line:
+            out.update(AC_ID.findall(line))
+    return sorted(out)
+
+
+def _unmapped_acs(text: str) -> list[str]:
+    """Warn about ACs no line ties to any requirement — a gap in the FRS.
+
+    Not an error: the FRS is the owner's document and this script is not the
+    place to dictate its shape. But an AC nobody can map is an AC that cannot
+    stand in for its requirement in a test name, and that is worth saying
+    before it looks like the test is missing.
+    """
+    mapped: set[str] = set()
+    every: set[str] = set(AC_ID.findall(text))
+    for line in text.splitlines():
+        if REQ_ID.search(line):
+            mapped.update(AC_ID.findall(line))
+    orphans = sorted(every - mapped)
+    if not orphans:
+        return []
+    return [
+        "docs/FRS.md: no line ties these acceptance criteria to a requirement "
+        "ID, so they cannot stand in for one in a test name: "
+        + ", ".join(orphans)
+    ]
 
 
 if __name__ == "__main__":

@@ -34,7 +34,14 @@ def main() -> int:
     if payload.get("stop_hook_active"):
         return 0
 
-    root = Path(os.environ.get("CLAUDE_PROJECT_DIR", ".")).resolve()
+    # Fall back to this file's own location, not to the current directory.
+    # The hook lives in .claude/hooks/, so the project root is two levels up
+    # and is knowable without the environment. Falling back to "." produced the
+    # worst possible failure: with the variable unset and the process started
+    # anywhere else, the check reported "check-template.py is missing", which
+    # reads as "somebody deleted the checker" rather than "wrong directory".
+    env_root = os.environ.get("CLAUDE_PROJECT_DIR")
+    root = Path(env_root).resolve() if env_root else Path(__file__).resolve().parents[2]
     script = root / "scripts" / "check-template.py"
     if not script.is_file():
         print(

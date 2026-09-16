@@ -7,8 +7,13 @@
 
 msg=$(sed -e '/^#/d' -e '/^$/d' "$1" | head -1)
 
+# Тільки ті форми, які git генерує сам. Раніше тут стояло "Merge "*|"Revert "*,
+# і будь-яке повідомлення, що починалося з цих слів, проходило без типу й без
+# ID — найдешевший спосіб закомітити повз перевірку, знайдений випадково.
 case "$msg" in
-  "Merge "*|"Revert "*) exit 0 ;;
+  "Merge branch "*|"Merge branches "*|"Merge remote-tracking branch "*) exit 0 ;;
+  "Merge pull request "*|"Merge tag "*|"Merge commit "*) exit 0 ;;
+  'Revert "'*) exit 0 ;;
 esac
 
 if ! printf '%s' "$msg" | grep -qE '^(feat|fix|refactor|test|docs|chore|build|ci|revert)(\([a-z0-9-]+\))?: '; then

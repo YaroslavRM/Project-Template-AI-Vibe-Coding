@@ -33,8 +33,25 @@ AC_ID = re.compile(r"\bAC-\d{3}\b")
 # test named after one of them would look like a missing test. Accepts the
 # hyphen, en dash and em dash, since which one lands in the document depends on
 # the editor, not on intent.
-AC_RANGE = re.compile(r"\bAC-(\d{3})\s*[-\u2013\u2014]{1,2}\s*AC-(\d{3})\b")
+AC_RANGE = re.compile(
+    r"\bAC-(\d{3})\s*(?:[-\u2013\u2014]{1,2}|\.{2,3}|\u2026)\s*AC-(\d{3})\b"
+)
 MAX_RANGE = 99  # a wider span is a typo, not a range
+# Only a table row or a heading may tie an AC to a requirement. Prose may not.
+#
+# This is narrower than "the same line", and the reason is a defect found by
+# auditing the prompts rather than the script. prompts/01-ba-interview.md asks
+# section 12 for a line shaped `Business Goal -> BR -> FR -> AC`, which puts
+# five requirement IDs and a range of acceptance criteria on one line. Under a
+# plain same-line rule every one of those FRs inherits every one of those ACs,
+# so a slice claiming FR-006 with no test at all passed the Definition of Done
+# because some other test was named after AC-001. A false yes, and nothing
+# downstream could catch it.
+#
+# A table row (`| FR-002 | ... | AC-001, AC-002 |`) and a heading
+# (`### AC-001 (FR-002)`) both state one mapping deliberately. A sentence that
+# happens to mention several IDs does not.
+MAPPING_LINE = re.compile(r"^\s*(?:\||#{1,6}\s)")
 STATUS = re.compile(r"\b(TODO|IN PROGRESS|DONE|BLOCKED)\b")
 DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 
@@ -48,6 +65,17 @@ SKIP_DIRS = {
 }
 # Applied whichever way the file list was obtained: a tracked 200 MB fixture is
 # still not something to read looking for a requirement ID in a test name.
+# The rules say the ID lives in the *test name*, so only test files are
+# searched. Before this, a docstring or a comment in any .py/.md/.toml under
+# source/ satisfied the Definition of Done — the text promised more than the
+# check delivered. Deliberately generous across ecosystems; the failure message
+# names these patterns so a project with another layout knows why it failed.
+TEST_NAME = re.compile(
+    r"(?:^test[_.-]|[_.-]test\.|[_.-]tests\.|test\.[a-z]+$|tests?\.[a-z]+$"
+    r"|[_.-]spec\.|spec\.[a-z]+$|\.feature$)",
+    re.IGNORECASE,
+)
+TEST_DIRS = {"test", "tests", "spec", "specs", "__tests__", "testing"}
 TEXT_SUFFIXES = {
     ".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".rb", ".php", ".java",
     ".kt", ".cs", ".swift", ".sql", ".sh", ".md", ".txt", ".yml", ".yaml",
@@ -200,7 +228,14 @@ def main() -> int:
         # and could match an ID across the seam between two unrelated files.
         wanted = {req: [req, *frs_acs_for.get(req, [])] for req in claimed}
         found: set[str] = set()
-        for path in source_files():
+        tests = [p for p in source_files() if _is_test(p)]
+        if not tests:
+            print(
+                "WARN:  no test files found under source/. Looked for names like "
+                "test_*, *_test.*, *.spec.*, *.feature, and anything under "
+                "test/ tests/ spec/ __tests__/."
+            )
+        for path in tests:
             if len(found) == len(wanted):
                 break
             text = read(path)
@@ -247,17 +282,33 @@ def main() -> int:
     return 0
 
 
+def _is_test(path: Path) -> bool:
+    """A file whose name or folder says it holds tests."""
+    if TEST_NAME.search(path.name):
+        return True
+    return any(part.lower() in TEST_DIRS for part in path.parts)
+
+
 def _mentions(text: str, ident: str) -> bool:
     """FR-014 in a test name is usually spelled FR_014 or FR014.
 
     Identifiers with hyphens are not valid in most languages, so a test called
     test_FR_014_filter is the normal way to satisfy the traceability rule. Only
     matching the hyphenated form would fail every project that uses it.
+
+    Case-insensitive, and that is not laxity. pep8-naming (ruff N802/N999,
+    flake8-naming, pylint) rejects a capitalised test function or module, so the
+    first slice of any linted Python project faces a choice between a red linter
+    and a red Definition of Done. `test_fr_014_filter` traces just as well.
+    Safe to relax now that only test files are searched: a lowercase `fr014`
+    inside prose can no longer be mistaken for a test name.
     """
     prefix, number = ident.split("-")
     # Not \b: in test_FR_014_filter the underscore is itself a word character,
     # so \b never fires next to it.
-    return re.search(rf"(?<![A-Za-z0-9]){prefix}[-_]?{number}(?![0-9])", text) is not None
+    return re.search(
+        rf"(?<![A-Za-z0-9]){prefix}[-_]?{number}(?![0-9])", text, re.IGNORECASE
+    ) is not None
 
 
 def _acs_for(text: str, req: str) -> list[str]:
@@ -288,7 +339,9 @@ def _acs_for(text: str, req: str) -> list[str]:
 
 
 def _acs_in(line: str) -> set[str]:
-    """Every AC named on a line, ranges expanded."""
+    """Every AC named on a mapping line, ranges expanded. Prose maps nothing."""
+    if not MAPPING_LINE.match(line):
+        return set()
     out = set(AC_ID.findall(line))
     for lo, hi in AC_RANGE.findall(line):
         first, last = int(lo), int(hi)
@@ -306,11 +359,10 @@ def _unmapped_acs(text: str) -> list[str]:
     before it looks like the test is missing.
     """
     mapped: set[str] = set()
-    every: set[str] = set()
+    every: set[str] = set(AC_ID.findall(text))
     for line in text.splitlines():
         found = _acs_in(line)
-        every.update(found)
-        if REQ_ID.search(line):
+        if found and REQ_ID.search(line):
             mapped.update(found)
     orphans = sorted(every - mapped)
     if not orphans:

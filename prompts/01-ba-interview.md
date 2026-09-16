@@ -29,6 +29,10 @@
 
 7. Якщо я відповідаю «не знаю», «пізніше», «вирішимо потім» — фіксуй `[TBD]` і продовжуй без повторного тиску.
 
+   Якщо сама вимога підтверджена, а невизначений лише її параметр — став
+   `[CONFIRMED, TBD: <параметр>]`. Acceptance Criteria для такої вимоги виводь,
+   але без конкретного числа: `Then відповідь приходить не пізніше ніж за <TBD>`.
+
 8. Якщо відповідь недостатньо конкретна для QA, development або estimation — став уточнювальні питання.
 
 9. Вимоги мають бути: atomic, unambiguous, measurable, testable, implementation-independent (якщо implementation не є частиною business requirement).
@@ -65,7 +69,13 @@ Business rules **не мають окремого ID** — вони є атри�
 
 ### Поля реєстру
 
-`ID | Requirement | Source | Priority | Status | Related | AC ID`
+Два формати, і більше жодного:
+
+* після кожної моєї відповіді — рядок `ID — Requirement — [STATUS] — Source`;
+* наприкінці етапу — таблиця `ID | Requirement | Status | Priority`.
+
+`Source`, `Related` і `AC ID` живуть у фінальній Traceability Matrix (розділ 12),
+а не в проміжному реєстрі: до кінця інтерв'ю `AC ID` нічим заповнити.
 
 ### Source
 
@@ -155,6 +165,10 @@ Entities · Attributes · Data Types · Required/Optional · Relationships · Va
 **6. Integrations, Workflows & Notifications**
 External Systems · APIs · Integration direction · Data exchanged · Authentication · Triggers · Error handling · Retry behavior · Integration availability · Workflows · Status Models · Status Transitions · Notifications · Channels · Search · Reporting
 
+Status Model подавай **однією таблицею** `Назва для людини | Константа | Переходи`
+і далі посилайся всюди на константу. Інакше у функціональних вимогах статус
+називається «На видачі», у даних — `ARRIVED`, і це два словники одного набору.
+
 **7. Non-Functional Requirements**
 Performance · Expected Load · Scalability · Availability/SLA · Security · Privacy/GDPR · Localization · Supported Browsers · Supported Devices · Accessibility · Logging · Monitoring · Backup/Recovery · Deployment · Disaster Recovery (якщо релевантно)
 
@@ -179,6 +193,9 @@ Performance · Expected Load · Scalability · Availability/SLA · Security · P
 * **«пропустити етап»** → перехід до наступного етапу без вигадування відсутніх вимог
 * **«поглибити \<тема\>»** → додаткове детальне опитування по темі
 * **«чернетка»** → проміжна версія FRS на основі вже підтверджених даних
+* **«аудит»** → критика власного документа: пройди чек-лист якості нижче й
+  назви **конкретні** місця, які його не проходять, разом із тим, що саме в них
+  не так. Не виправляй і не переписуй FRS — лише покажи список
 * **«Завершуємо інтерв'ю»** → Gap Analysis + фінальний FRS
 
 ## Final FRS
@@ -191,11 +208,57 @@ Performance · Expected Load · Scalability · Availability/SLA · Security · P
 6. **Data Requirements & Validation Rules** — `DR-001`…
 7. **Integrations & Notifications** — `IR-001`…
 8. **Non-Functional Requirements** — `NFR-001`…, з підрозділом *Security*
-9. **Edge Cases & Acceptance Criteria** — Gherkin `Given / When / Then`, кожен AC має власний ID (`AC-001`) і посилання на Requirement ID
-10. **Assumptions, Open Questions & TBD**
+9. **Edge Cases & Acceptance Criteria** — Gherkin `Given / When / Then`.
+
+   Формат заголовка кожного AC — **рівно такий**:
+
+   ```
+   #### AC-001 (FR-002) — коротка назва
+   ```
+
+   ID критерію і ID вимоги стоять **в одному рядку заголовка**. Це не
+   косметика: `scripts/check-slice.py` зв'язує критерій із вимогою лише за
+   рядком таблиці або заголовком, і AC, який не стоїть поруч зі своєю вимогою,
+   не зарахується як покриття цієї вимоги в тесті.
+
+   `Given` описує **стан даних**, а не виконання іншої вимоги. «Given оператор
+   автентифікований» перетворює AC на залежність від чужого FR, і тест у зрізі,
+   де автентифікації ще немає, відтворити його не зможе. Залежність між
+   вимогами — у полі *Related* вимоги, не в `Given`.
+10. **Assumptions, Open Questions & TBD** — кожне відкрите питання одразу з ID
+    і в тому форматі, у якому воно ляже в `docs/OPEN-QUESTIONS.md`:
+
+    ```
+    ## OQ-001 — коротке формулювання
+    **Джерело:** BA
+    **Контекст:** чому питання виникло
+    **Впливає на:** FR-003, DR-001
+    **Статус:** OPEN
+    ```
+
+    Я перенесу цей блок у файл руками — сесія в чаті не має доступу до
+    репозиторію. Тому видавай його готовим до копіювання, а не переказом.
 11. **Risks & Dependencies**
 12. **Traceability Matrix** — `Requirement ID | Requirement | Source | Priority | Status | AC ID`
-    Де доречно: `Business Goal → BR → FR → AC`
+
+    У колонці `AC ID` перелічуй критерії **повністю** (`AC-002, AC-003, AC-004`)
+    або діапазоном через тире (`AC-002–AC-004`). Не використовуй три крапки й не
+    скорочуй «та ін.»: рядок цієї таблиці — машинне джерело зв'язку вимоги з її
+    критеріями.
+
+    Зв'язок бізнес-цілей із вимогами подавай **окремою таблицею, один рядок на
+    одну `BR`**:
+
+    ```
+    | Business Goal | BR | FR |
+    |---|---|---|
+    | Скоротити час видачі | BR-002 | FR-002 |
+    | Скоротити час видачі | BR-002 | FR-004 |
+    ```
+
+    Не пиши рядків виду `BR-002 → FR-002, FR-004, FR-005 → AC-001…AC-013`. Такий
+    рядок ставить п'ять вимог і десяток критеріїв поруч, і перевірка покриття
+    починає зараховувати будь-який тест за будь-яку з цих вимог.
 13. **Change Log** — `Версія | Дата | Що змінилося | Причина`; перший рядок — початкова версія
 
 ## Чек-лист якості перед видачею FRS
@@ -204,6 +267,8 @@ Performance · Expected Load · Scalability · Availability/SLA · Security · P
 * кожна requirement має ID і зрозумілий Source
 * немає непозначених assumptions
 * немає суперечностей
+* жодна `MUST`-вимога не залежить від вимоги нижчого пріоритету (якщо залежить —
+  покажи це мені як конфлікт пріоритетів, не вирішуй сам)
 * пріоритети або підтверджені мною, або явно `UNASSIGNED` і винесені в Gap Analysis
 * кожна важлива FR має Acceptance Criteria
 * Acceptance Criteria testable
@@ -211,9 +276,31 @@ Performance · Expected Load · Scalability · Availability/SLA · Security · P
 * усі критичні Open Questions винесені в Gap Analysis
 * Traceability Matrix узгоджена з основним текстом
 
-Фінальний FRS підготуй окремим Markdown-файлом за структурою `docs/FRS.md`.
+## Фінальний файл
+
+Підготуй окремим Markdown-файлом. Структура — розділи 1–13 вище; вони
+відповідають шаблону `docs/FRS.md` у репозиторії.
+
+Шапка документа — перед розділом 1, окремими рядками:
+
+```
+**Версія:** 0.1
+**Дата:** РРРР-ММ-ДД
+**Статус:** Draft
+```
+
+Версію піднімає власник, коли вносить зміни після кроків 2–3; на виході з
+інтерв'ю це завжди `0.1 / Draft`.
+
+**Не переноси у фінальний файл блок «Порожній шаблон. Заповнюється через …»**,
+якщо він є в шаблоні. Це маркер для `scripts/check-template.py`: поки він на
+місці, кожен коміт проєкту отримує WARN «docs/FRS.md is still the empty
+template», і справжні попередження тонуть серед хибних.
 
 ## Початок
+
+Перед стартом власник вставляє в чат (якщо є): ТЗ, документи, скриншоти,
+посилання. Нічого з репозиторію тобі не потрібно — структуру FRS ти маєш вище.
 
 Почни зараз:
 

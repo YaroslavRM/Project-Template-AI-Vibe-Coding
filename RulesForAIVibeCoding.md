@@ -15,8 +15,8 @@ On conflict with any other file (`AGENTS.md`, `CLAUDE.md`, `docs/*`, code commen
 ```
 RulesForAIVibeCoding.md   development cycle rules (this file, PRIORITY)
 AGENTS.md                 thin pointer to these rules (read by Codex)
-CLAUDE.md                 imports AGENTS.md (read by Claude Code)
-prompts/                  prompts for the preparatory chat sessions — not used during development
+CLAUDE.md                 imports AGENTS.md and this file (read by Claude Code)
+prompts/                  prompts for the preparatory chat sessions (steps 1-3)
 prompts/dev/              the two cycle commands (slice start / slice finish) — canonical text
 docs/                     project documentation
 scripts/check-template.py integrity of the rules and of the machinery that enforces them
@@ -26,8 +26,8 @@ scripts/integrity.sha256  pinned hashes for the rules and for every check listed
 source/                   project code
 tmpBin/                   development tooling (venv, local binaries, toolchains)
 .githooks/                commit-msg (traceability) + pre-commit (integrity + IDs)
-.github/workflows/        the same checks, server-side — --no-verify cannot reach them
-.claude/settings.json     Claude Code permissions — committed, mirrors section Environments
+.github/workflows/        the same checks, server-side — --no-verify cannot reach them (optional: a project with no GitHub may delete it)
+.claude/settings.json     Claude Code permissions — committed; enforces what patterns can: secrets, --no-verify, force-push, edits to agreements
 .claude/commands/         /slice-start and /slice-finish — pointers to prompts/dev/, not copies
 .claude/hooks/            bash-guard (blocks what permission patterns cannot) + stop-integrity
 .agents/skills/           the same two commands for Codex — pointers, not copies
@@ -37,7 +37,7 @@ tmpBin/                   development tooling (venv, local binaries, toolchains)
 .env.example
 ```
 
-If something from this list is missing, **stop and tell me** — do not recreate it from memory. A silently rebuilt skeleton without `.githooks/` or `.gitattributes` looks fine and enforces nothing. Keep empty directories with a `.gitkeep`.
+If something from this list is missing, **stop and tell me** — do not recreate it from memory. A silently rebuilt skeleton without `.githooks/` or `.gitattributes` looks fine and enforces nothing. Keep empty directories with a `.gitkeep`. The one item that may legitimately be absent is `.github/workflows/`, and only when the project has no GitHub; `scripts/check-template.py` is the authority on the rest.
 
 ### The checks are not yours to edit
 
@@ -121,10 +121,13 @@ One session = one slice or one task from `docs/BACKLOG.md`.
 7. Run scripts/check-slice.py <SLICE-ID> and show its real output
 8. Show a diff summary: what changed, which FRs are closed
 9. After my OK — commit, docs and code together, in one commit
-10. Deploy strictly according to the scheme in ARCHITECTURE.md
 ```
 
 Steps 3 and 9 are never skipped.
+
+Deployment is not a step of the cycle. It happens on my explicit command, by the
+scheme in ARCHITECTURE.md — see *Environments*. A slice is finished when it is
+committed, not when it is deployed.
 
 The documentation update comes **before** the commit, not after it, and travels in the same commit as the code. The other order leaves the Progress Log either uncommitted or stranded in a second commit that nobody defined. For the same reason the Progress Log records the commit *subject*, not a hash that cannot exist yet.
 
@@ -164,11 +167,19 @@ And the reverse, which matters just as much: **do not manufacture options to fil
 
 A checklist you recite is a checklist that always passes. So it is split.
 
-**Machine-checked** — `python3 scripts/check-slice.py <SLICE-ID>`, and you paste its real output:
+**Machine-checked** — `python3 scripts/check-slice.py <SLICE-ID>` (on Windows in
+Git Bash there is often no `python3` — use `python`; see the *Windows* section of
+`README.md`), and you paste its real output:
 
 * the slice exists in `BACKLOG.md`, its status is off `TODO`, the Progress Log has a dated row for it
 * every requirement the slice claims exists in the FRS
 * every claimed requirement is traceable into `source/` — the test name carries the FR-ID or an AC-ID of it
+
+An `AC-*` counts as belonging to a requirement only where the two IDs sit on the
+same **table row or heading** in the FRS — `### AC-001 (FR-002)`, or a row of the
+Traceability Matrix. A sentence naming several requirements and a span of
+criteria ties nothing: it would let one test stand in for every requirement it
+mentions.
 * no new `TODO`/`FIXME` in the diff without `OPEN-QUESTIONS.md` being touched in the same diff
 
 **Owner-checked** — you state plainly whether each holds, and I decide:
@@ -196,7 +207,17 @@ The end-to-end key is the `FR-ID`. It survives all the way to the commit.
 
 * Commit: `feat: FR-014 order filter by status` — the ID must be in the **first
   line**; the commit-msg hook does not look at the body
-* The test name contains the FR-ID or AC-ID
+* The hook also accepts `DR-*`, `NFR-*`, `IR-*`, `TASK-*` and `SLICE-*`. Prefer
+  the `FR-ID`: it is the key that survives to the commit, and `SLICE-001` alone
+  says which batch of work a change belongs to but not which requirement it
+  serves. Use `SLICE-*` only when a commit genuinely spans a slice rather than a
+  requirement. `BR-*` is not accepted at all — a business requirement is
+  implemented through an `FR-*`, never committed against directly
+* The test name contains the FR-ID or AC-ID, in the test's **file name or
+  function name** — not in a comment or a docstring. `FR-014`, `FR_014` and
+  `FR014` all count, in any case: `test_fr_014_filter` is as valid as
+  `test_FR_014_filter`, because pep8-naming rejects the capitalised form and a
+  project should not have to choose between a red linter and a red DoD
 * A `wip/` branch, if one is needed at all, carries the FR-ID: `wip/fr-014-order-filter`
 
 If a change does not map to any FR — stop. Either the work is unnecessary, or there is a hole in the FRS.
@@ -209,6 +230,11 @@ Not all work is functionality: infrastructure, linters, CI, dependency updates, 
 * Commit: `chore: TASK-007 update dependencies` / `fix: FR-014 empty filter returns 500`.
 * A defect in an already-closed slice maps to the `FR-*` of the requirement it violates, and starts with a test that reproduces it.
 * Creating a new `TASK-*` is a change to `BACKLOG.md`, so it needs my confirmation. Found a problem — name it and propose a task, do not fix it silently.
+* `TASK-000` is the one ID that lives outside `BACKLOG.md`. It covers the work
+  that exists before the backlog does: the initial template commit, and the
+  commit of the documents produced by steps 1-3 — `docs: TASK-000 FRS,
+  architecture and backlog`. Without it the first commit of every project has no
+  legal ID, and the first thing anyone learns is how to get past the hook.
 
 Allowed commit types: `feat` · `fix` · `refactor` · `test` · `docs` · `chore` · `build` · `ci` · `revert`.
 

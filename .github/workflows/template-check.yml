@@ -24,7 +24,7 @@ jobs:
       # рядок, і воно видно в diff.
       - name: Manifest pin
         run: |
-          expected="eee37d9b20dc816e0cfc1c9d2efde7643bbf0b83c4f50914eda176335aa8771e"
+          expected="1f0473a7217f5e9508ac43dbf6582fb8da08c2d988833a9527d6ed0a4d7d93c9"
           actual=$(sha256sum scripts/integrity.sha256 | cut -d' ' -f1)
           if [ "$expected" != "$actual" ]; then
             echo "scripts/integrity.sha256 змінився, а пін у цьому workflow — ні."

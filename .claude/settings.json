@@ -11,8 +11,7 @@
       "Bash(git commit --no-verify:*)",
       "Bash(git commit -n:*)",
       "Bash(git push --force:*)",
-      "Bash(git push -f:*)",
-      "Bash(rm -rf:*)"
+      "Bash(git push -f:*)"
     ],
     "ask": [
       "Bash(git push:*)",

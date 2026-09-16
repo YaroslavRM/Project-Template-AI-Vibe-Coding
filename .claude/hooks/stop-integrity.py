@@ -55,6 +55,10 @@ def main() -> int:
         result = subprocess.run(
             [sys.executable, str(script)],
             cwd=str(root), capture_output=True, text=True, timeout=TIMEOUT,
+            # Without this the child's output is decoded with the console code
+            # page on Windows, and every em dash in the check's own messages
+            # reaches the agent as a replacement character.
+            encoding="utf-8", errors="replace",
         )
     except (OSError, subprocess.SubprocessError) as exc:
         print(f"could not run the integrity check: {exc}", file=sys.stderr)

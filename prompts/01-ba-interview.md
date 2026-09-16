@@ -200,7 +200,7 @@ Performance · Expected Load · Scalability · Availability/SLA · Security · P
 
 ## Final FRS
 
-1. **Document Information & Product Overview** — Version · Date · Problem Statement · Business Goals · Success Metrics · Scope In · Scope Out (+ поділ на релізи, якщо є) · Stakeholders · Constraints
+1. **Document Information & Product Overview** — Problem Statement · Business Goals · Success Metrics · Scope In · Scope Out (+ поділ на релізи, якщо є) · Stakeholders · Constraints
 2. **User Roles & Permissions Matrix**
 3. **Business Requirements** — `BR-001`…
 4. **Functional Requirements** — `FR-001`…, у формулюванні «Система повинна …», кожна atomic і з однозначним критерієм перевірки
@@ -229,15 +229,22 @@ Performance · Expected Load · Scalability · Availability/SLA · Security · P
     і в тому форматі, у якому воно ляже в `docs/OPEN-QUESTIONS.md`:
 
     ```
-    ## OQ-001 — коротке формулювання
-    **Джерело:** BA
-    **Контекст:** чому питання виникло
-    **Впливає на:** FR-003, DR-001
-    **Статус:** OPEN
-    ```
+### OQ-XXX — <коротке формулювання>
+**Відкрито:** YYYY-MM-DD
+**Джерело:** BA
+**Блокує:** FR-012, SLICE-004 (або «не блокує»)
+**Питання:**
+**Варіанти / гіпотези:**
+**Статус:** OPEN
+**Відповідь:**
+**Закрито:**
+```
 
-    Я перенесу цей блок у файл руками — сесія в чаті не має доступу до
-    репозиторію. Тому видавай його готовим до копіювання, а не переказом.
+    Це **дослівно** формат `docs/OPEN-QUESTIONS.md` — я перенесу блок у файл
+    руками, сесія в чаті не має доступу до репозиторію. У самому FRS заголовок
+    третього рівня (`###`), щоб не ламати нумерацію розділів; у файлі OQ він
+    стане `##`. Поля не скорочуй і не перейменовуй: інакше у файлі житимуть
+    два формати.
 11. **Risks & Dependencies**
 12. **Traceability Matrix** — `Requirement ID | Requirement | Source | Priority | Status | AC ID`
 

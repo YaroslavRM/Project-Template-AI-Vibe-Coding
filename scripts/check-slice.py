@@ -66,16 +66,28 @@ SKIP_DIRS = {
 # Applied whichever way the file list was obtained: a tracked 200 MB fixture is
 # still not something to read looking for a requirement ID in a test name.
 # The rules say the ID lives in the *test name*, so only test files are
-# searched. Before this, a docstring or a comment in any .py/.md/.toml under
-# source/ satisfied the Definition of Done — the text promised more than the
-# check delivered. Deliberately generous across ecosystems; the failure message
-# names these patterns so a project with another layout knows why it failed.
+# searched — and inside them, only the file's own name and the lines that
+# declare a test. Narrowing to test files was not enough: a docstring
+# "Covers FR-003" in a file with no ID in any name still closed the Definition
+# of Done, which is exactly what the rules say does not count. Deliberately
+# generous across ecosystems; the failure message names these patterns so a
+# project with another layout knows why it failed.
 TEST_NAME = re.compile(
     r"(?:^test[_.-]|[_.-]test\.|[_.-]tests\.|test\.[a-z]+$|tests?\.[a-z]+$"
     r"|[_.-]spec\.|spec\.[a-z]+$|\.feature$)",
     re.IGNORECASE,
 )
 TEST_DIRS = {"test", "tests", "spec", "specs", "__tests__", "testing"}
+# A line that gives a test its name. Given/When/Then are step text, not names,
+# so they are not here: an ID in a step is a comment by another spelling.
+TEST_DECL = re.compile(
+    r"^\s*(?:[-*]\s*)?(?:@\w+\s+)?"
+    r"(?:(?:public|private|protected|internal|static|final|async|export|pub|open)\s+)*"
+    r"(?:def|fn|func|function|class|struct|module|it|test|describe|context|specify"
+    r"|Scenario(?:\s+Outline)?|Feature|Example)\b"
+    r"|^\s*(?:it|test|describe|context)\s*\(",
+    re.IGNORECASE,
+)
 TEXT_SUFFIXES = {
     ".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".rb", ".php", ".java",
     ".kt", ".cs", ".swift", ".sql", ".sh", ".md", ".txt", ".yml", ".yaml",
@@ -215,7 +227,10 @@ def main() -> int:
         check(bool(claimed), f"{slice_id} names at least one requirement ID")
     if claimed:
         frs_text = read(FRS)
-        unknown = [r for r in claimed if r not in frs_text]
+        # \b, not `in`: "FR-011" is a substring of "NFR-011", and in any real
+        # FRS the FR and NFR numbers overlap. Without the boundary a slice can
+        # claim a requirement that does not exist and be told that it does.
+        unknown = [r for r in claimed if not re.search(rf"\b{re.escape(r)}\b", frs_text)]
         check(not unknown, f"all requirement IDs exist in FRS ({', '.join(unknown) or 'ok'})")
 
         # The rules require the test name to carry the FR-ID or an AC-ID of it.
@@ -238,9 +253,9 @@ def main() -> int:
         for path in tests:
             if len(found) == len(wanted):
                 break
-            text = read(path)
+            names = _test_names(path)
             for req, idents in wanted.items():
-                if req not in found and any(_mentions(text, i) for i in idents):
+                if req not in found and any(_mentions(names, i) for i in idents):
                     found.add(req)
         untested = [req for req in claimed if req not in found]
         check(
@@ -280,6 +295,18 @@ def main() -> int:
         return 1
     print("\nOK: mechanical Definition of Done met.")
     return 0
+
+
+def _test_names(path: Path) -> str:
+    """The places in a test file where a name can live.
+
+    The file's own name, plus every line that declares a test. Everything else
+    in the file — docstrings, comments, fixtures, assertions — is body, and the
+    rules are explicit that an ID in the body does not count.
+    """
+    names = [path.name]
+    names.extend(ln for ln in read(path).splitlines() if TEST_DECL.match(ln))
+    return "\n".join(names)
 
 
 def _is_test(path: Path) -> bool:
@@ -333,7 +360,7 @@ def _acs_for(text: str, req: str) -> list[str]:
     """
     out: set[str] = set()
     for line in text.splitlines():
-        if req in line:
+        if re.search(rf"\b{re.escape(req)}\b", line):
             out.update(_acs_in(line))
     return sorted(out)
 

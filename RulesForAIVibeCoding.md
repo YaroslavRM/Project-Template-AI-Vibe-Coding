@@ -55,7 +55,7 @@ So: you do not edit those files, you do not edit the manifest, and you never run
 
 | File | Contents |
 |---|---|
-| `docs/FRS.md` | Requirements. Source of truth. `FR-*`, `DR-*`, `NFR-*`, `IR-*` + Acceptance Criteria |
+| `docs/FRS.md` | Requirements. Source of truth. `BR-*` (business level — implemented through an `FR-*`, never committed against), `FR-*`, `DR-*`, `NFR-*`, `IR-*` + Acceptance Criteria |
 | `docs/ARCHITECTURE.md` | Components, boundaries, stack, environments, deployment, migrations, rollback |
 | `docs/ADR/*.md` | Technical decisions and their reasons |
 | `docs/BACKLOG.md` | Vertical slices, tech tasks, statuses, dependencies, order |

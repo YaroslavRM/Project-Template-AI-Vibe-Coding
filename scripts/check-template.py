@@ -20,10 +20,17 @@ permission file.
 Hashing only the rules would leave the checker itself rewritable — and a
 checker that always prints OK passes both the commit hook and CI.
 
---fix rewrites the whole baseline. It is deliberately awkward: it needs a
-second flag and a terminal, so it cannot be reached by re-spelling a command
-that a permission rule was supposed to block. Run it only after a change you
-agreed to, and commit integrity.sha256 in the same commit as the change.
+--fix rewrites the whole baseline and, in the same run, the manifest pin in
+.github/workflows/template-check.yml. It is deliberately awkward: it needs a
+second flag and a terminal, so a permission rule that blocks it cannot be
+dodged by re-spelling the command. Run it only after a change you agreed to,
+and commit integrity.sha256 and the workflow in the same commit as the change.
+
+Why --fix writes the pin instead of leaving it to be copied by hand: copying a
+hash stops nobody. Whoever can run --fix can edit the workflow line too, so the
+manual step bought no safety — it only produced commits where the pin was
+forgotten. What the pin actually catches is a manifest changed WITHOUT --fix,
+and that is now caught twice: by this script on every commit, and by CI.
 """
 from __future__ import annotations
 
@@ -35,6 +42,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = ROOT / "scripts" / "integrity.sha256"
+WORKFLOW = ROOT / ".github" / "workflows" / "template-check.yml"
+# The pin line in the workflow. Optional: a project with no GitHub may delete
+# the workflow outright, and then there is simply nothing to keep in step.
+PIN = re.compile(r'(?m)^(?P<pre>\s*expected=")(?P<hash>[0-9a-f]{64})(?P<post>")$')
 
 # Files whose contents are pinned. Order is the order written to the manifest.
 #
@@ -100,7 +111,7 @@ AGENT_LINE = "AGENT: stop here and tell the owner. Do not run --fix, do not edit
 OWNER_LINE = (
     "OWNER: if you agreed to this change, run "
     "`python3 scripts/check-template.py --fix --i-know-what-im-doing` "
-    "and commit scripts/integrity.sha256 in the same commit."
+    "and commit scripts/integrity.sha256 and the workflow in the same commit."
 )
 
 FIX = "--fix" in sys.argv
@@ -129,6 +140,34 @@ def write_manifest() -> None:
     MANIFEST.parent.mkdir(parents=True, exist_ok=True)
     MANIFEST.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"baseline written: {len(lines)} files pinned in scripts/integrity.sha256")
+    write_pin()
+
+
+def manifest_digest() -> str:
+    return digest(MANIFEST)
+
+
+def write_pin() -> None:
+    """Keep the workflow's manifest pin in step with the manifest."""
+    if not WORKFLOW.is_file():
+        print("note: no .github/workflows/template-check.yml — no pin to update")
+        return
+    text = WORKFLOW.read_text(encoding="utf-8")
+    m = PIN.search(text)
+    if m is None:
+        print(
+            "ERROR: .github/workflows/template-check.yml has no `expected=\"<sha256>\"` "
+            "line to update. Restore it from git, or delete the workflow if this "
+            "project has no CI."
+        )
+        sys.exit(1)
+    want = manifest_digest()
+    if m.group("hash") == want:
+        print("manifest pin in the workflow already matches")
+        return
+    WORKFLOW.write_text(PIN.sub(lambda mm: mm.group("pre") + want + mm.group("post"), text, count=1),
+                        encoding="utf-8")
+    print(f"manifest pin updated in .github/workflows/template-check.yml: {want[:12]}…")
 
 
 # --- 1. Integrity of the rules and of the machinery that enforces them ------
@@ -190,6 +229,28 @@ else:
     for rel in pinned:
         if rel not in covered():
             warnings.append(f"scripts/integrity.sha256 pins {rel}, which is no longer covered")
+
+    # The workflow pins the manifest's own hash — the manifest cannot pin
+    # itself without closing a loop. CI checks this too, but checking it here
+    # as well turns a red build into a blocked commit, which is cheaper. The
+    # two are not redundant: CI is the copy that `--no-verify` cannot reach.
+    if WORKFLOW.is_file():
+        m = PIN.search(WORKFLOW.read_text(encoding="utf-8"))
+        if m is None:
+            errors.append(
+                ".github/workflows/template-check.yml has no `expected=\"<sha256>\"` "
+                "line — the manifest is no longer pinned anywhere, and a manifest "
+                "rewritten by hand would pass every check.\n"
+                f"  {AGENT_LINE}\n  {OWNER_LINE}"
+            )
+        elif m.group("hash") != digest(MANIFEST):
+            errors.append(
+                "scripts/integrity.sha256 does not match the pin in "
+                ".github/workflows/template-check.yml.\n"
+                "  Either the manifest was edited without --fix, or --fix ran on an "
+                "older version of this script that did not update the pin.\n"
+                f"  {AGENT_LINE}\n  {OWNER_LINE}"
+            )
 
 # --- 2. Skeleton ------------------------------------------------------------
 

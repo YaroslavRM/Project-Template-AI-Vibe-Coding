@@ -31,11 +31,22 @@ AC_ID = re.compile(r"\bAC-\d{3}\b")
 STATUS = re.compile(r"\b(TODO|IN PROGRESS|DONE|BLOCKED)\b")
 DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 
+# Only the fallback for a working copy with no usable git — the real filter is
+# .gitignore, read through `git ls-files` in source_files(). Kept because a
+# check that silently scans nothing is worse than a slow one.
 SKIP_DIRS = {
-    ".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build",
-    ".next", ".turbo", "coverage", "htmlcov", ".pytest_cache", ".mypy_cache",
-    ".ruff_cache", "tmpBin",
+    ".git", "node_modules", "vendor", ".venv", "venv", "__pycache__", "dist",
+    "build", "target", ".next", ".turbo", ".gradle", "Pods", "coverage",
+    "htmlcov", ".pytest_cache", ".mypy_cache", ".ruff_cache", "tmpBin",
 }
+# Applied whichever way the file list was obtained: a tracked 200 MB fixture is
+# still not something to read looking for a requirement ID in a test name.
+TEXT_SUFFIXES = {
+    ".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".rb", ".php", ".java",
+    ".kt", ".cs", ".swift", ".sql", ".sh", ".md", ".txt", ".yml", ".yaml",
+    ".toml", ".json", ".html", ".css", ".vue", ".svelte", ".feature",
+}
+MAX_BYTES = 1_000_000
 
 results: list[tuple[bool, str]] = []
 
@@ -51,14 +62,68 @@ def read(path: Path) -> str:
         return ""
 
 
-def git(*args: str) -> str:
+def git_out(*args: str) -> str | None:
+    """Stdout of a git command, or None when git could not answer.
+
+    None and "" are different answers on purpose: "" means git ran and found
+    nothing, None means there was no usable git. source_files() falls back to a
+    directory walk only in the second case — reading a git failure as "no files"
+    would switch the traceability check off without saying so.
+    """
     try:
         out = subprocess.run(
-            ["git", *args], cwd=ROOT, capture_output=True, text=True, timeout=30
+            ["git", *args], cwd=ROOT, capture_output=True, text=True, timeout=60
         )
-        return out.stdout if out.returncode == 0 else ""
     except (OSError, subprocess.SubprocessError):
-        return ""
+        return None
+    return out.stdout if out.returncode == 0 else None
+
+
+def git(*args: str) -> str:
+    return git_out(*args) or ""
+
+
+def source_files() -> list[Path]:
+    """Files under source/ that belong to the project.
+
+    The list comes from git: tracked files, plus untracked ones that .gitignore
+    does not exclude. That is the definition of "the project's own code", and it
+    needs no maintenance per stack — a PHP project's source/vendor, a Rust
+    target/ or a Go module cache drop out because the project already ignores
+    them, not because this file happens to know their names.
+
+    It also fails in the safe direction. If the list comes back empty, no
+    requirement is found in source/ and the check reports them as untested —
+    loud, not silent.
+    """
+    if not SOURCE.is_dir():
+        return []
+    listing = git_out(
+        "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "source"
+    )
+    if listing is None:
+        print("WARN:  git unavailable — falling back to the SKIP_DIRS name list")
+        candidates = list(SOURCE.rglob("*"))
+    else:
+        # A merge conflict lists the same path once per stage; dedupe, keep order.
+        candidates = [ROOT / rel for rel in dict.fromkeys(listing.split("\0")) if rel]
+    out: list[Path] = []
+    for path in candidates:
+        try:
+            parts = path.relative_to(ROOT).parts
+        except ValueError:
+            parts = path.parts
+        if any(part in SKIP_DIRS for part in parts):
+            continue
+        if path.suffix.lower() not in TEXT_SUFFIXES:
+            continue
+        try:
+            if not path.is_file() or path.stat().st_size > MAX_BYTES:
+                continue
+        except OSError:
+            continue
+        out.append(path)
+    return out
 
 
 def slice_block(text: str, slice_id: str) -> list[str]:
@@ -118,21 +183,25 @@ def main() -> int:
         unknown = [r for r in claimed if r not in frs_text]
         check(not unknown, f"all requirement IDs exist in FRS ({', '.join(unknown) or 'ok'})")
 
-        source_text = ""
-        if SOURCE.is_dir():
-            for path in SOURCE.rglob("*"):
-                if path.is_file() and not any(p in SKIP_DIRS for p in path.parts):
-                    source_text += read(path)
         # The rules require the test name to carry the FR-ID or an AC-ID of it.
         frs_acs_for = {
             req: [ac for ac in set(AC_ID.findall(frs_text)) if _ac_near(frs_text, ac, req)]
             for req in claimed
         }
-        untested = [
-            req for req in claimed
-            if not _mentions(source_text, req)
-            and not any(_mentions(source_text, ac) for ac in frs_acs_for.get(req, []))
-        ]
+        # One file at a time, stopping once every requirement is accounted for.
+        # The previous version concatenated all of source/ into a single string,
+        # which read hundreds of megabytes of vendored dependencies for nothing
+        # and could match an ID across the seam between two unrelated files.
+        wanted = {req: [req, *frs_acs_for.get(req, [])] for req in claimed}
+        found: set[str] = set()
+        for path in source_files():
+            if len(found) == len(wanted):
+                break
+            text = read(path)
+            for req, idents in wanted.items():
+                if req not in found and any(_mentions(text, i) for i in idents):
+                    found.add(req)
+        untested = [req for req in claimed if req not in found]
         check(
             not untested,
             "every claimed requirement appears in source/ (test names carry the ID): "

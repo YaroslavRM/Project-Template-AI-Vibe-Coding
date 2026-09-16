@@ -22,6 +22,7 @@ nothing to compare against yet.
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -36,10 +37,12 @@ REQ_ID = re.compile(r"\b(?:FR|DR|NFR|IR|BR)-\d{3}\b")
 AC_ID = re.compile(r"\bAC-\d{3}\b")
 ADR_ID = re.compile(r"\bADR-\d{3}\b")
 
+# Only the fallback for a working copy with no usable git — the real filter is
+# .gitignore, read through `git ls-files` in source_files().
 SKIP_DIRS = {
-    ".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build",
-    ".next", ".turbo", "coverage", "htmlcov", ".pytest_cache", ".mypy_cache",
-    ".ruff_cache", "tmpBin",
+    ".git", "node_modules", "vendor", ".venv", "venv", "__pycache__", "dist",
+    "build", "target", ".next", ".turbo", ".gradle", "Pods", "coverage",
+    "htmlcov", ".pytest_cache", ".mypy_cache", ".ruff_cache", "tmpBin",
 }
 TEXT_SUFFIXES = {
     ".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".rb", ".php", ".java",
@@ -59,19 +62,54 @@ def read(path: Path) -> str:
         return ""
 
 
+def git_out(*args: str) -> str | None:
+    """Stdout of a git command, or None when git could not answer.
+
+    None and "" are different answers on purpose: "" means git ran and found
+    nothing, None means there was no usable git. source_files() falls back to a
+    directory walk only in the second case.
+    """
+    try:
+        out = subprocess.run(
+            ["git", *args], cwd=ROOT, capture_output=True, text=True, timeout=60
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.stdout if out.returncode == 0 else None
+
+
 def source_files() -> list[Path]:
+    """Files under source/ that belong to the project.
+
+    The list comes from git: tracked files, plus untracked ones that .gitignore
+    does not exclude. This runs on every commit, so the cost matters — but the
+    reason is correctness first. Third-party code is not the project's code: an
+    `AC-123` that happens to appear in a vendored package or its changelog used
+    to be reported as an invented ID and blocked the commit.
+    """
     if not SOURCE.is_dir():
         return []
-    out = []
-    for path in SOURCE.rglob("*"):
-        if not path.is_file():
-            continue
-        if any(part in SKIP_DIRS for part in path.parts):
+    listing = git_out(
+        "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "source"
+    )
+    if listing is None:
+        print("WARN:  git unavailable — falling back to the SKIP_DIRS name list")
+        candidates = list(SOURCE.rglob("*"))
+    else:
+        # A merge conflict lists the same path once per stage; dedupe, keep order.
+        candidates = [ROOT / rel for rel in dict.fromkeys(listing.split("\0")) if rel]
+    out: list[Path] = []
+    for path in candidates:
+        try:
+            parts = path.relative_to(ROOT).parts
+        except ValueError:
+            parts = path.parts
+        if any(part in SKIP_DIRS for part in parts):
             continue
         if path.suffix.lower() not in TEXT_SUFFIXES:
             continue
         try:
-            if path.stat().st_size > MAX_BYTES:
+            if not path.is_file() or path.stat().st_size > MAX_BYTES:
                 continue
         except OSError:
             continue

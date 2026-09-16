@@ -28,6 +28,13 @@ SOURCE = ROOT / "source"
 ID_ARG = re.compile(r"^(SLICE|TASK)-\d{3}$")
 REQ_ID = re.compile(r"\b(?:FR|DR|NFR|IR)-\d{3}\b")
 AC_ID = re.compile(r"\bAC-\d{3}\b")
+# A traceability matrix routinely abbreviates: `AC-006–AC-014, AC-025`. Reading
+# only the endpoints would leave every AC in between mapped to nothing, and a
+# test named after one of them would look like a missing test. Accepts the
+# hyphen, en dash and em dash, since which one lands in the document depends on
+# the editor, not on intent.
+AC_RANGE = re.compile(r"\bAC-(\d{3})\s*[-\u2013\u2014]{1,2}\s*AC-(\d{3})\b")
+MAX_RANGE = 99  # a wider span is a typo, not a range
 STATUS = re.compile(r"\b(TODO|IN PROGRESS|DONE|BLOCKED)\b")
 DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 
@@ -276,8 +283,18 @@ def _acs_for(text: str, req: str) -> list[str]:
     out: set[str] = set()
     for line in text.splitlines():
         if req in line:
-            out.update(AC_ID.findall(line))
+            out.update(_acs_in(line))
     return sorted(out)
+
+
+def _acs_in(line: str) -> set[str]:
+    """Every AC named on a line, ranges expanded."""
+    out = set(AC_ID.findall(line))
+    for lo, hi in AC_RANGE.findall(line):
+        first, last = int(lo), int(hi)
+        if 0 <= last - first <= MAX_RANGE:
+            out.update(f"AC-{n:03d}" for n in range(first, last + 1))
+    return out
 
 
 def _unmapped_acs(text: str) -> list[str]:
@@ -289,10 +306,12 @@ def _unmapped_acs(text: str) -> list[str]:
     before it looks like the test is missing.
     """
     mapped: set[str] = set()
-    every: set[str] = set(AC_ID.findall(text))
+    every: set[str] = set()
     for line in text.splitlines():
+        found = _acs_in(line)
+        every.update(found)
         if REQ_ID.search(line):
-            mapped.update(AC_ID.findall(line))
+            mapped.update(found)
     orphans = sorted(every - mapped)
     if not orphans:
         return []

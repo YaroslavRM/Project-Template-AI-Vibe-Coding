@@ -524,6 +524,25 @@ python.org, при встановленні галочка **Add python.exe to P
 }
 ```
 
+### `--fix` у Git Bash не запускається
+
+`python3 scripts/check-template.py --fix --i-know-what-im-doing` у Git Bash
+відповідає `ERROR: --fix only runs from a terminal` — хоча термінал у вас перед
+очима. Це не хиба перевірки: MinTTY, термінал Git Bash, віддає програмам
+**пайп**, а не консоль Windows, тож `isatty()` бачить те саме, що побачив би у
+скрипті чи в агента.
+
+Запускайте `--fix` із **PowerShell або cmd** — там консоль справжня:
+
+```powershell
+cd D:\code\<проєкт>
+python scripts\check-template.py --fix --i-know-what-im-doing
+```
+
+Решта команд із цього README працює в Git Bash як завжди: обмеження стосується
+тільки `--fix`, бо тільки він вимагає терміналу. Хто не хоче перемикати вікно —
+`winpty python scripts/check-template.py --fix --i-know-what-im-doing`.
+
 ### Кодування виводу
 
 Скрипти друкують українською, а Git Bash на Windows бере кодування консолі —

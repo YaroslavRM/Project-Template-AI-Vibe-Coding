@@ -35,6 +35,7 @@ and that is now caught twice: by this script on every commit, and by CI.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import subprocess
 import sys
@@ -138,7 +139,13 @@ def write_manifest() -> None:
             sys.exit(1)
         lines.append(f"{digest(path)}  {rel}")
     MANIFEST.parent.mkdir(parents=True, exist_ok=True)
-    MANIFEST.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    # newline="\n" is not cosmetic. On Windows write_text translates \n to
+    # \r\n, and the manifest is read by `sha256sum -c` in .githooks/pre-commit,
+    # which then sees every path as ending in a carriage return and reports
+    # "No such file or directory" for all ten of them. This script would still
+    # say OK — Python reads with universal newlines — so the owner gets a green
+    # check and a blocked commit at the same time.
+    MANIFEST.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
     print(f"baseline written: {len(lines)} files pinned in scripts/integrity.sha256")
     write_pin()
 
@@ -165,8 +172,10 @@ def write_pin() -> None:
     if m.group("hash") == want:
         print("manifest pin in the workflow already matches")
         return
-    WORKFLOW.write_text(PIN.sub(lambda mm: mm.group("pre") + want + mm.group("post"), text, count=1),
-                        encoding="utf-8")
+    WORKFLOW.write_text(
+        PIN.sub(lambda mm: mm.group("pre") + want + mm.group("post"), text, count=1),
+        encoding="utf-8", newline="\n",
+    )
     print(f"manifest pin updated in .github/workflows/template-check.yml: {want[:12]}…")
 
 
@@ -182,6 +191,15 @@ if FIX:
         # A permission rule matches the text of a command, so it can be dodged
         # by respelling it. A terminal cannot be respelled into existence.
         print("ERROR: --fix only runs from a terminal, not from a script, hook or agent.")
+        if os.name == "nt" or "MSYSTEM" in os.environ:
+            # Git Bash on Windows fails this check even for the owner: MinTTY
+            # hands programs a pipe rather than a console, so isatty() is false
+            # there for everyone. Without this hint the owner reads "not from a
+            # terminal" while sitting in one, and has no way forward.
+            print("  On Windows this also fails in Git Bash — MinTTY gives the")
+            print("  process a pipe, not a console. Use PowerShell or cmd:")
+            print("      python scripts\\check-template.py --fix --i-know-what-im-doing")
+            print("  or, to stay in Git Bash, prefix with winpty.")
         print("  " + AGENT_LINE)
         sys.exit(1)
     write_manifest()

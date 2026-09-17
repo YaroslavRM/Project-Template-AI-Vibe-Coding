@@ -295,11 +295,13 @@ if gitignore.is_file():
 try:
     inside = subprocess.run(
         ["git", "rev-parse", "--is-inside-work-tree"],
-        cwd=ROOT, capture_output=True, text=True, timeout=10,
+        cwd=ROOT, capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=10,
     )
     out = subprocess.run(
         ["git", "config", "--get", "core.hooksPath"],
-        cwd=ROOT, capture_output=True, text=True, timeout=10,
+        cwd=ROOT, capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=10,
     )
     if inside.returncode != 0:
         warnings.append("not a git repository yet — hooks not checked")

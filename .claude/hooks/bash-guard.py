@@ -189,8 +189,16 @@ def manifest_violation(segs: list[str]) -> str | None:
 TMPBIN = "tmpBin"
 DELETE_HEAD = re.compile(r"^(?:sudo\s+)?(?:rm|unlink|truncate)\b")
 FIND_DELETE = re.compile(r"^(?:sudo\s+)?find\b[\s\S]*?(?:\s-delete\b|-exec\s+rm\b)")
-CD_HEAD = re.compile(r"^cd\s+(?P<path>[^\s;&|]+)")
+# The path group is optional: a bare `cd` (no argument) changes directory too
+# — to $HOME on a POSIX shell — and used to fall through this regex entirely,
+# leaving the tracked "inside tmpBin" state untouched instead of updated.
+CD_HEAD = re.compile(r"^cd\b(?:\s+(?P<path>[^\s;&|]+))?")
+POPD_HEAD = re.compile(r"^popd\b")
 WIN_DRIVE = re.compile(r"^[A-Za-z]:")
+# A cd target this hook cannot resolve from text alone: the previous
+# directory (`cd -`), or an environment variable it cannot read the value of
+# (`cd $OLDPWD`, `cd $HOME`, and the `${...}` spellings of both).
+UNKNOWN_CD = re.compile(r"^-$|^\$\{?(?:OLDPWD|HOME)\b")
 
 
 def _slash(text: str) -> str:
@@ -229,7 +237,7 @@ def _find_roots(tokens: list[str]) -> list[str]:
     return roots or ["."]
 
 
-def _apply_cd(segs: list[str], path: str) -> list[str]:
+def _apply_cd(segs: list[str], path: str | None) -> list[str]:
     """Best-effort tracking of the shell's directory as a segment stack.
 
     Used only to decide whether the shell sits inside tmpBin/. An absolute
@@ -240,8 +248,21 @@ def _apply_cd(segs: list[str], path: str) -> list[str]:
     segment instead of being ignored, so `cd ..` from tmpBin/sandbox lands
     back in tmpBin (still exempt) while `cd ../..` from the same place leaves
     it (exempt lifted) — both were wrong with a plain substring check.
+
+    A destination this hook cannot resolve from text alone — no path at all
+    (bare `cd`, which goes to $HOME), `cd -` (the previous directory, whose
+    value this hook never saw), or `cd $OLDPWD` / `cd $HOME` (a variable this
+    hook cannot read) — fails *closed*: treated as leaving tmpBin, not as
+    staying in it. The alternative reading a live session actually hit was
+    the wrong one: `cd tmpBin && cd - && rm -rf source/x` kept the delete
+    exemption alive because `cd -` matched nothing and left `inside` at its
+    previous value.
     """
+    if path is None:
+        return []
     p = path.strip("\"'")
+    if UNKNOWN_CD.match(p):
+        return []
     sp = _slash(p)
     if not p:
         return segs
@@ -276,6 +297,13 @@ def delete_violation(segs: list[str], cwd: str) -> str | None:
         if cd:
             cwd_segs = _apply_cd(cwd_segs, cd.group("path"))
             inside = TMPBIN in cwd_segs
+            continue
+        if POPD_HEAD.match(plain):
+            # Same reasoning as the unresolved cd forms above: popd's
+            # destination is the directory stack this hook never tracked, so
+            # it cannot be read as "still inside".
+            cwd_segs = []
+            inside = False
             continue
         tokens = plain.split()[1:]
         if FIND_DELETE.match(plain):

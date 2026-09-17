@@ -322,7 +322,15 @@ def main() -> int:
     # diff against HEAD for changes to tracked content, and a directory
     # listing for brand-new files, which `git diff HEAD` never sees until
     # they are staged — a fresh file with a TODO used to pass silently.
-    diff = git_out("diff", "HEAD", "--unified=0")
+    #
+    # docs/BACKLOG.md is excluded from both: TODO is a legitimate slice status
+    # there (RulesForAIVibeCoding.md's own STATUS vocabulary), so adding a new
+    # slice — completely routine — was flagged as a marker needing
+    # docs/OPEN-QUESTIONS.md, for a status word that was never a loose end. A
+    # real TODO left in source/ or any other doc is unaffected.
+    diff = git_out(
+        "diff", "HEAD", "--unified=0", "--", ".", ":(exclude)docs/BACKLOG.md"
+    )
     if diff is None:
         # A repo with no HEAD yet (the very first commit) fails this diff
         # outright; git() used to fold that failure into "", which read as
@@ -342,7 +350,8 @@ def main() -> int:
     untracked_paths = [f for f in untracked.split("\0") if f]
     new_marker_files = [
         rel for rel in untracked_paths
-        if (ROOT / rel).suffix.lower() in TEXT_SUFFIXES
+        if rel != "docs/BACKLOG.md"
+        and (ROOT / rel).suffix.lower() in TEXT_SUFFIXES
         and re.search(r"\b(TODO|FIXME)\b", read(ROOT / rel))
     ]
 

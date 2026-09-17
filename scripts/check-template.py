@@ -325,23 +325,40 @@ try:
 except (OSError, subprocess.SubprocessError):
     warnings.append("git not available — hooks not checked")
 
-# --- 4b. python3 is not the Windows Store stub ------------------------------
+# --- 4b. python3 actually runs, instead of guessing from its path -----------
 # .claude/settings.json invokes python3 for both agent hooks. A fresh Windows
 # machine commonly has a Microsoft Store shim ahead of any real install on
 # PATH: it opens the Store and exits 9009 instead of running Python. `command
 # -v python3` (used by .githooks/pre-commit) reports success for it anyway, so
 # nothing else here would notice — the hooks would simply never run, silently,
 # while this very check kept saying OK. See README.md, section Windows.
+#
+# The first version of this check read "WindowsApps" out of the resolved
+# path, on the assumption that only the stub lives there. It does not: Python
+# installed *from* the Store also registers its App Execution Alias under the
+# very same WindowsApps folder, and that one runs fine. The path told the two
+# apart by accident; running the interpreter tells them apart for real.
 if os.name == "nt":
     python3_path = shutil.which("python3")
-    if python3_path and "WindowsApps" in python3_path:
-        errors.append(
-            f"python3 resolves to the Windows Store stub ({python3_path}) — "
-            "it opens the Store instead of running Python, so "
-            ".claude/hooks/bash-guard.py and stop-integrity.py never run. "
-            "See README.md, section Windows, to make python3 a real "
-            "interpreter."
-        )
+    if python3_path:
+        try:
+            probe = subprocess.run(
+                [python3_path, "-c", "pass"],
+                capture_output=True, timeout=10,
+            )
+            python3_broken = probe.returncode != 0
+        except (OSError, subprocess.SubprocessError):
+            python3_broken = True
+        if python3_broken:
+            errors.append(
+                f"python3 ({python3_path}) does not run — "
+                ".claude/hooks/bash-guard.py and stop-integrity.py never run, "
+                "and this check would otherwise keep saying OK. On Windows "
+                "this is usually the Microsoft Store's App Execution Alias "
+                "placeholder (it exits without running anything, commonly "
+                "code 9009). See README.md, section Windows, to make python3 "
+                "a real interpreter."
+            )
 
 # --- 5. Non-blocking hygiene warnings ---------------------------------------
 # The placeholder string alone is not enough: an agent that deletes the

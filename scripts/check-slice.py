@@ -116,6 +116,14 @@ TEXT_SUFFIXES = {
     ".kt", ".cs", ".swift", ".sql", ".sh", ".md", ".txt", ".yml", ".yaml",
     ".toml", ".json", ".html", ".css", ".vue", ".svelte", ".feature",
 }
+# A test is code (or a Gherkin feature). TEXT_SUFFIXES is the right width for
+# the TODO/FIXME scan, but it let a `tests/PLAN.md` line reading
+# `- test FR-002 manually` count as a test declaration — TEST_DECL accepts a
+# list marker followed by the word `test` — and a `tests/fixtures/fr_003.json`
+# count as a test name. Neither is a test.
+TEST_SUFFIXES = TEXT_SUFFIXES - {
+    ".md", ".txt", ".yml", ".yaml", ".toml", ".json", ".html", ".css",
+}
 MAX_BYTES = 1_000_000
 
 results: list[tuple[bool, str]] = []
@@ -198,13 +206,19 @@ def source_files() -> list[Path]:
 
 
 def slice_block(text: str, slice_id: str) -> list[str]:
-    """Lines from the heading that names the ID up to the next heading."""
+    """Lines from the heading that names the ID up to the next heading.
+
+    The heading must *start* with the ID — `### SLICE-001 — name`, the shape
+    BACKLOG.md's template gives. A heading that merely contains it, such as a
+    Release Plan's `### MVP — SLICE-001 (FR-001), SLICE-002 (FR-003)`, used to
+    be taken as the slice's block when it came first, which handed the slice
+    the release's status and every other slice's requirements. There is no
+    fallback to that on purpose: a missing section is reported, a wrong one
+    is not.
+    """
     lines = text.splitlines()
-    start = None
-    for i, line in enumerate(lines):
-        if line.lstrip().startswith("#") and slice_id in line:
-            start = i
-            break
+    own = re.compile(rf"^\s*#+\s*{re.escape(slice_id)}\b")
+    start = next((i for i, ln in enumerate(lines) if own.match(ln)), None)
     if start is None:
         return []
     block = [lines[start]]
@@ -396,12 +410,36 @@ def _test_names(path: Path) -> str:
     rules are explicit that an ID in the body does not count.
     """
     names = [path.name]
-    names.extend(ln for ln in read(path).splitlines() if TEST_DECL.match(ln))
+    names.extend(
+        _without_comment(ln) for ln in read(path).splitlines() if TEST_DECL.match(ln)
+    )
     return "\n".join(names)
 
 
+def _without_comment(line: str) -> str:
+    """The declaration line up to a comment that starts outside quotes.
+
+    `def test_listing():  # FR-001` and `it("does x", () => { /* FR-001 */`
+    both put the ID in a comment on the declaration line, and the whole line
+    used to count as the name. Inside quotes a `#` is part of the name —
+    `it("covers #FR-001")` — and stays.
+    """
+    quote = ""
+    for i, c in enumerate(line):
+        if quote:
+            if c == quote:
+                quote = ""
+        elif c in "\"'`":
+            quote = c
+        elif c == "#" or line.startswith(("//", "/*"), i):
+            return line[:i]
+    return line
+
+
 def _is_test(path: Path) -> bool:
-    """A file whose name or folder says it holds tests."""
+    """A code file whose name or folder says it holds tests."""
+    if path.suffix.lower() not in TEST_SUFFIXES:
+        return False
     if TEST_NAME.search(path.name):
         return True
     return any(part.lower() in TEST_DIRS for part in path.parts)

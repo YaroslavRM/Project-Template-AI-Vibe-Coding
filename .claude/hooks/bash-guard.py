@@ -7,8 +7,11 @@ message back to the agent.
 Why a hook and not more deny rules: a Bash permission rule matches the text of
 the command, so it is dodged by reordering flags, adding `./`, changing the
 working directory first, or using the short form of a flag. And Read/Edit deny
-rules do not reach Bash subprocesses at all — `Read(./.env)` blocks the Read
-tool, not `head .env`. This hook looks at the command that is actually about
+rules reach Bash only part of the way: Claude Code parses simple commands
+(`cat`, `ls`) and applies `Read(**/*.pem)` to their paths, but not to a path
+inside an interpreter — `python -c "open('x.pem')"`, `node -e`, a heredoc —
+which is exactly the form only the command text can catch. Probed on
+2026-09-17 (audit 7). This hook looks at the command that is actually about
 to run.
 
 It is still not a sandbox, and the limit is worth stating plainly rather than
@@ -128,8 +131,24 @@ ALLOWED_ENV_FILES = {".env.example", ".env.sample", ".env.template", ".env.dist"
 # `app.env_settings` and `config.environment` are Python, not filenames, and
 # blocking them broke inline `python3 -c` in a live session.
 ENV_TOKEN = re.compile(r"(?<![A-Za-z0-9_])\.env[A-Za-z0-9_.-]*")
-# `cat .en?` never spells the name, but the shell expands it to one.
-ENV_GLOB = re.compile(r"(?<![A-Za-z0-9_])\.e[A-Za-z0-9_.*?\[\]-]*[*?\[]")
+# `cat .en?` never spells the name, but the shell expands it to one. Brace
+# expansion is the same trick with a different bracket: `.en{v,}` and
+# `.{env,gitignore}` both expand to `.env`. The second lookbehind also
+# excludes `*`, `?` and `]`, so `ls *.{py,md}` is an ordinary glob and not a
+# dotfile.
+ENV_GLOB = re.compile(
+    r"(?<![A-Za-z0-9_])\.e[A-Za-z0-9_.*?\[\]{},-]*[*?\[{]"
+    r"|(?<![A-Za-z0-9_*?\]])\.\{"
+)
+# Mirror of the Read deny rules in settings.json that the Bash tool does not
+# apply inside an interpreter: `*.pem`, `*.key`, anything under `secrets/`.
+# `--key` (no dot), `monkey.keyboard` (not a suffix), `id.key.pub` and a
+# `cfg.key(` method call stay out of it; `cfg.key)` does not, and that false
+# positive is accepted over missing `open('db.key')`.
+SECRET_PATH = re.compile(
+    r"[^\s\"'(),;:=]*\.(?:pem|key)(?![A-Za-z0-9_.(-])|(?<![A-Za-z0-9_.-])secrets/\S*",
+    re.IGNORECASE,
+)
 
 
 def env_violation(command: str, nq: str) -> str | None:
@@ -155,31 +174,85 @@ def env_violation(command: str, nq: str) -> str | None:
                 f"`{m.group(0)}` is a glob that can expand onto a dotfile such as "
                 f".env without naming it. Say which file you need and why."
             )
+        m = SECRET_PATH.search(text)
+        if m:
+            return (
+                f"this command touches {m.group(0)}. Key files and secrets/ are "
+                f"denied to the Read tool in settings.json, and the same boundary "
+                f"holds for Bash. Rules, section Environments: do not read, print "
+                f"or log secret files."
+            )
     return None
 
 
-# --- the manifest -----------------------------------------------------------
+# --- the manifest and the files it pins ---------------------------------------
 
 MANIFEST = "integrity.sha256"
-MANIFEST_READ = re.compile(
-    r"^(?:cat|head|tail|less|more|wc|grep|rg|diff|sha256sum|shasum|md5sum"
-    r"|git\s+(?:diff|show|log|status|ls-files|blame))\b"
+# The files scripts/integrity.sha256 pins — the PROTECTED list of
+# scripts/check-template.py, by file name. Edit/Write on these paths is `ask`
+# in settings.json; a `sed -i` or `cp` through Bash used to be neither asked
+# nor blocked, and between that write and the Stop hook the guard it rewrote
+# was already the new one. Kept as names rather than read from the manifest,
+# so a deleted manifest does not also switch this rule off.
+PROTECTED = (
+    "RulesForAIVibeCoding.md",
+    ".gitattributes",
+    "check-template.py",
+    "check-slice.py",
+    "check-ids.py",
+    ".githooks/pre-commit",
+    ".githooks/commit-msg",
+    ".claude/settings.json",
+    "bash-guard.py",
+    "stop-integrity.py",
+    MANIFEST,
 )
-MANIFEST_REDIRECT = re.compile(r">>?\s*[\"']?[^\s;&|]*integrity\.sha256")
+# Commands that only read, run, or merely name the file. `sed` and `perl` are
+# here only without an in-place flag. An interpreter with an inline program
+# (`python -c`, `node -e`) is not: that is the one form where the path in the
+# text is an argument to open(), not a script to run. `for`, `echo`, `test`
+# name a path without touching it; a redirect on the same segment is still
+# caught by PROTECTED_REDIRECT.
+PROTECTED_READ = re.compile(
+    r"^(?:cat|head|tail|less|more|wc|grep|rg|diff|ls|stat|file|sort|uniq|cut|awk"
+    r"|for|echo|printf|test|\["
+    r"|sha256sum|shasum|md5sum|git\s+(?:diff|show|log|status|ls-files|blame|add|commit)"
+    r"|(?:sed|perl)\b(?![\s\S]*\s-[A-Za-z]*i|[\s\S]*--in-place)"
+    r"|(?:python3?|py|bash|sh)\b(?![\s\S]*\s-[ce]\b))\b"
+)
+PROTECTED_REDIRECT = re.compile(r">>?\s*[^\s;&|]*(?:" + "|".join(re.escape(p) for p in PROTECTED) + ")")
+CP_HEAD = re.compile(r"^cp\b")
+
+
+def _names_protected(token: str) -> bool:
+    return any(p in token for p in PROTECTED)
 
 
 def manifest_violation(segs: list[str]) -> str | None:
     for seg in segs:
         plain = unquoted(seg)
-        if MANIFEST not in plain:
+        hit = next((p for p in PROTECTED if p in plain), None)
+        if hit is None:
             continue
-        if MANIFEST_READ.match(plain) and not MANIFEST_REDIRECT.search(plain):
+        if PROTECTED_READ.match(plain) and not PROTECTED_REDIRECT.search(plain):
             continue
+        # `cp <pinned> elsewhere` is a read of the pinned file; the last
+        # argument is the destination, and it is that one that must not be
+        # pinned.
+        if CP_HEAD.match(plain) and not _names_protected(plain.split()[-1]):
+            continue
+        if hit == MANIFEST:
+            return (
+                f"this command writes to scripts/{MANIFEST}. The manifest is the "
+                f"baseline every other check is measured against; rewriting it by hand "
+                f"legitimises whatever was changed. That is --fix, and --fix is the "
+                f"owner's. Reading it — cat, diff, sha256sum -c — is fine."
+            )
         return (
-            f"this command writes to scripts/{MANIFEST}. The manifest is the "
-            f"baseline every other check is measured against; rewriting it by hand "
-            f"legitimises whatever was changed. That is --fix, and --fix is the "
-            f"owner's. Reading it — cat, diff, sha256sum -c — is fine."
+            f"this command writes to {hit}, a file pinned by scripts/{MANIFEST}. "
+            f"Rules, section 0: the checks are not yours to edit. Say which check "
+            f"is wrong and why, and propose the change — the owner applies it and "
+            f"runs --fix. Reading or running it — cat, diff, python — is fine."
         )
     return None
 
@@ -187,18 +260,30 @@ def manifest_violation(segs: list[str]) -> str | None:
 # --- deleting ---------------------------------------------------------------
 
 TMPBIN = "tmpBin"
-DELETE_HEAD = re.compile(r"^(?:sudo\s+)?(?:rm|unlink|truncate)\b")
-FIND_DELETE = re.compile(r"^(?:sudo\s+)?find\b[\s\S]*?(?:\s-delete\b|-exec\s+rm\b)")
+# The command word itself, after any wrapper: `\rm` (the classic alias
+# bypass), `/bin/rm`, `command rm`, `env rm`, `xargs rm` after a find. All of
+# these ran unblocked while `rm` did not, and none of them is concatenation or
+# base64 — they are the plain spellings.
+DELETE_CMD = re.compile(r"^\\?(?:/\S*/)?(?:rm|unlink|truncate)$")
+WRAPPERS = {"sudo", "command", "env", "busybox", "xargs", "nice", "nohup", "time"}
+FIND_HEAD = re.compile(r"^(?:sudo\s+)?find\b")
+FIND_DELETE = re.compile(
+    r"^(?:sudo\s+)?find\b[\s\S]*?(?:\s-delete\b|-(?:exec|ok)(?:dir)?\s+\\?(?:/\S*/)?rm\b)"
+)
 # The path group is optional: a bare `cd` (no argument) changes directory too
 # — to $HOME on a POSIX shell — and used to fall through this regex entirely,
 # leaving the tracked "inside tmpBin" state untouched instead of updated.
-CD_HEAD = re.compile(r"^cd\b(?:\s+(?P<path>[^\s;&|]+))?")
+# pushd is cd with a stack; the stack is not tracked, so a bare pushd (swap)
+# is unresolved like a bare cd.
+CD_HEAD = re.compile(r"^(?:cd|pushd)\b(?:\s+(?P<path>[^\s;&|]+))?")
 POPD_HEAD = re.compile(r"^popd\b")
 WIN_DRIVE = re.compile(r"^[A-Za-z]:")
 # A cd target this hook cannot resolve from text alone: the previous
-# directory (`cd -`), or an environment variable it cannot read the value of
-# (`cd $OLDPWD`, `cd $HOME`, and the `${...}` spellings of both).
-UNKNOWN_CD = re.compile(r"^-$|^\$\{?(?:OLDPWD|HOME)\b")
+# directory (`cd -`), or anything the shell expands at run time — a variable,
+# a `$(...)` substitution, a backtick. Naming the two variables that matter
+# (`$OLDPWD`, `$HOME`) left `cd "$CLAUDE_PROJECT_DIR"` and `cd $PWD/..` read
+# as relative paths, i.e. as staying inside tmpBin.
+UNKNOWN_CD = re.compile(r"^-$|[$`]")
 
 
 def _slash(text: str) -> str:
@@ -211,6 +296,10 @@ def _segments(path: str) -> list[str]:
 
 def _under_tmpbin(target: str, cwd_inside: bool) -> bool:
     target = target.strip("\"'")
+    # `rm -rf "$PROJECT/source"` typed inside tmpBin: the value is not in the
+    # text, so it cannot be inside tmpBin. Fails closed, like `cd $VAR`.
+    if "$" in target or "`" in target:
+        return False
     if ".." in _segments(target):
         return False
     if TMPBIN in _segments(target):
@@ -226,6 +315,29 @@ def _under_tmpbin(target: str, cwd_inside: bool) -> bool:
 
 def _rm_targets(tokens: list[str]) -> list[str]:
     return [t for t in tokens if not t.startswith("-")]
+
+
+def _delete_targets(tokens: list[str], piped_from: list[str]) -> list[str] | None:
+    """Targets of an rm/unlink/truncate, or None when the segment is not one.
+
+    Skips wrappers (`sudo`, `env VAR=x`, `xargs -0`) up to the command word.
+    `xargs rm` with no argument of its own deletes whatever the previous
+    segment printed: the roots of a `find` if that is what it was, otherwise
+    something this hook cannot see, spelled `$stdin` so that it fails closed
+    like any other unresolved path.
+    """
+    via_xargs = False
+    for i, tok in enumerate(tokens):
+        if DELETE_CMD.match(tok):
+            targets = _rm_targets(tokens[i + 1:])
+            if via_xargs and not targets:
+                targets = piped_from or ["$stdin"]
+            return targets
+        if tok in WRAPPERS or tok.startswith("-") or "=" in tok:
+            via_xargs = via_xargs or tok == "xargs"
+            continue
+        return None
+    return None
 
 
 def _find_roots(tokens: list[str]) -> list[str]:
@@ -291,6 +403,7 @@ def delete_violation(segs: list[str], cwd: str) -> str | None:
     """
     cwd_segs = _segments(cwd)
     inside = TMPBIN in cwd_segs
+    piped_from: list[str] = []
     for seg in segs:
         plain = unquoted(seg)
         cd = CD_HEAD.match(plain)
@@ -305,12 +418,15 @@ def delete_violation(segs: list[str], cwd: str) -> str | None:
             cwd_segs = []
             inside = False
             continue
-        tokens = plain.split()[1:]
+        tokens = plain.split()
         if FIND_DELETE.match(plain):
-            targets = _find_roots(tokens)
-        elif DELETE_HEAD.match(plain):
-            targets = _rm_targets(tokens[1:] if tokens[:1] == ["rm"] else tokens)
+            targets = _find_roots(tokens[1:])
         else:
+            targets = _delete_targets(tokens, piped_from)
+        # What the next segment's `xargs rm` would receive: a find's roots,
+        # or nothing knowable.
+        piped_from = _find_roots(tokens[1:]) if FIND_HEAD.match(plain) else []
+        if targets is None:
             continue
         if not targets or all(_under_tmpbin(t, inside) for t in targets):
             continue
@@ -326,10 +442,19 @@ def delete_violation(segs: list[str], cwd: str) -> str | None:
 
 # Flags only. These ask "was this flag passed", and the answer must not be
 # taken from prose: a commit message mentioning -name is not --no-verify.
+#
+# `git` may carry global options before the subcommand — `git -C . commit`,
+# `git -c user.name=x commit`, `git --no-pager push` — and `\bgit\s+commit`
+# saw none of them, so `git -C . commit -n` walked past every rule below
+# (and past the `Bash(git commit:*)` ask-prefix in settings.json, which is
+# a prefix). GIT_GLOBALS eats any number of `-x`, `--x`, `-C value`, `-c k=v`.
+# `--no-veri`: git accepts any unambiguous prefix of a long option, and
+# `--no-veri` is one (`--no-v` is not — it collides with --no-verbose).
+GIT_GLOBALS = r"\bgit(?:\s+-\S*(?:\s+[^-\s;&|]\S*)?)*\s+"
 FLAG_RULES: list[tuple[re.Pattern[str], str]] = [
     (
         re.compile(
-            r"\bgit\s+commit\b(?=[\s\S]*?\s(?:--no-verify\b|-[A-Za-z]*n[A-Za-z]*\b))"
+            GIT_GLOBALS + r"commit\b(?=[\s\S]*?\s(?:--no-veri[a-z]*\b|-[A-Za-z]*n[A-Za-z]*\b))"
         ),
         "git commit with --no-verify (or -n, including inside a flag cluster "
         "like -nm) skips the commit-msg and pre-commit hooks. If a hook is in "
@@ -339,7 +464,7 @@ FLAG_RULES: list[tuple[re.Pattern[str], str]] = [
         # --force-with-lease is allowed: it refuses to overwrite work it has not
         # seen, and `git push` is already `ask` in settings.json.
         re.compile(
-            r"\bgit\s+push\b(?=[\s\S]*?\s(?:--force(?!-with-lease)\b|-[A-Za-z]*f[A-Za-z]*\b))"
+            GIT_GLOBALS + r"push\b(?=[\s\S]*?\s(?:--force(?!-with-lease)\b|-[A-Za-z]*f[A-Za-z]*\b))"
         ),
         "force push rewrites history. Rules, section Environments: irreversible "
         "actions are the owner's call. --force-with-lease is allowed.",
@@ -355,15 +480,28 @@ TEXT_RULES: list[tuple[re.Pattern[str], str]] = [
         "Same answer: irreversible, so it is the owner's call.",
     ),
     (
-        re.compile(r"\bgit\b[\s\S]*?\s-c\s+[\"']?core\.hooksPath"),
+        # Config keys are case-insensitive to git, so `core.hookspath` is the
+        # same key — hence IGNORECASE on every rule that names it. The
+        # environment forms (GIT_CONFIG_KEY_n, GIT_CONFIG_PARAMETERS,
+        # --config-env) set the same key without ever spelling `-c`.
+        re.compile(
+            r"\bgit\b[\s\S]*?\s-c\s+[\"']?core\.hookspath"
+            r"|GIT_CONFIG_KEY_\d+=[\"']?core\.hookspath"
+            r"|GIT_CONFIG_PARAMETERS=[\s\S]*?core\.hookspath"
+            r"|--config-env=[\"']?core\.hookspath",
+            re.IGNORECASE,
+        ),
         "overriding core.hooksPath for one command disables the hooks for that "
         "command. Same answer as --no-verify: say what is in the way.",
     ),
     (
+        # The lookahead ends `.githooks` at whitespace, a quote, a separator
+        # or the end of the text: `\b` let `.githooks/../evil` through.
         re.compile(
-            r"\bgit\s+config\s+"
+            GIT_GLOBALS + r"config\s+"
             r"(?:(?!--get\b|--get-all\b|--get-regexp\b|--list\b|-l\b)[^\s;&|]+\s+)*?"
-            r"core\.hooksPath\b(?!\s+[\"']?\.githooks\b)"
+            r"core\.hookspath\b(?!\s+[\"']?\.githooks/?(?:[\s\"';&|)]|$))",
+            re.IGNORECASE,
         ),
         "core.hooksPath must stay pointed at .githooks.",
     ),

@@ -7,16 +7,24 @@
 
 msg=$(sed -e '/^#/d' -e '/^$/d' "$1" | head -1)
 
-# Тільки ті форми, які git генерує сам. Раніше тут стояло "Merge "*|"Revert "*,
-# і будь-яке повідомлення, що починалося з цих слів, проходило без типу й без
-# ID — найдешевший спосіб закомітити повз перевірку, знайдений випадково.
+# Merge-коміт звільняється від перевірки лише тоді, коли це справді merge:
+# під час `git merge` у commit-msg існує MERGE_HEAD, а при рукописному
+# `git commit -m "Merge branch 'x'"` — ні. Раніше вистачало самого тексту
+# "Merge branch "*, і будь-хто міг набрати його вручну — найдешевший спосіб
+# закомітити без типу й без ID.
+if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+  exit 0
+fi
+
+# Revert: git сам підставляє тему звернутого коміту в лапках, тобто й її ID.
+# Тому тип не вимагається, а ID — як завжди: підроблений 'Revert "x"' без
+# ID не проходить.
 case "$msg" in
-  "Merge branch "*|"Merge branches "*|"Merge remote-tracking branch "*) exit 0 ;;
-  "Merge pull request "*|"Merge tag "*|"Merge commit "*) exit 0 ;;
-  'Revert "'*) exit 0 ;;
+  'Revert "'*) type_ok=1 ;;
+  *) type_ok=0 ;;
 esac
 
-if ! printf '%s' "$msg" | grep -qE '^(feat|fix|refactor|test|docs|chore|build|ci|revert)(\([a-z0-9-]+\))?: '; then
+if [ "$type_ok" = 0 ] && ! printf '%s' "$msg" | grep -qE '^(feat|fix|refactor|test|docs|chore|build|ci|revert)(\([a-z0-9-]+\))?: '; then
   echo "commit-msg: очікується '<type>: ...' де type = feat|fix|refactor|test|docs|chore|build|ci|revert"
   echo "  отримано: $msg"
   exit 1

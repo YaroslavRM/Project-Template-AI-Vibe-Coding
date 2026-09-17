@@ -167,14 +167,19 @@ if ARCH.is_file():
 # In source, the same ID is usually spelled FR_014 or FR014: hyphens are not
 # valid in identifiers, and the rules ask for the ID in the test name.
 # Not \b on the left: in test_FR_014 the underscore is a word character, so a
-# word boundary never fires there.
-SRC_REQ_ID = re.compile(r"(?<![A-Za-z0-9])(FR|DR|NFR|IR|BR)[-_]?(\d{3})(?![0-9])")
-SRC_AC_ID = re.compile(r"(?<![A-Za-z0-9])AC[-_]?(\d{3})(?![0-9])")
+# word boundary never fires there. Case-insensitive, because check-slice.py
+# accepts `test_fr_014` as traceability (pep8-naming rejects the capitalised
+# form) — so an invented `fr_999` in exactly that spelling must be caught
+# here too, not only the capitalised one.
+SRC_REQ_ID = re.compile(
+    r"(?<![A-Za-z0-9])(FR|DR|NFR|IR|BR)[-_]?(\d{3})(?![0-9])", re.IGNORECASE
+)
+SRC_AC_ID = re.compile(r"(?<![A-Za-z0-9])AC[-_]?(\d{3})(?![0-9])", re.IGNORECASE)
 
 for path in source_files():
     text = read(path)
     rel = path.relative_to(ROOT)
-    found_reqs = {f"{p}-{n}" for p, n in SRC_REQ_ID.findall(text)}
+    found_reqs = {f"{p.upper()}-{n}" for p, n in SRC_REQ_ID.findall(text)}
     found_acs = {f"AC-{n}" for n in SRC_AC_ID.findall(text)}
     report("requirement IDs", found_reqs - frs_reqs, str(rel))
     report("acceptance criteria", found_acs - frs_acs, str(rel))

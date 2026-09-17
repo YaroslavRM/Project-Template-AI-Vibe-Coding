@@ -12,6 +12,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Повна історія: крок «Commit subjects» читає теми всіх комітів
+          # push-у / PR-у, а не лише HEAD.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -24,7 +28,7 @@ jobs:
       # рядок, і воно видно в diff.
       - name: Manifest pin
         run: |
-          expected="0426df6d98e8c4d8f29e29cc25d8d002ecb570909e8adb0b62c5afa950251f5f"
+          expected="d1dd871adc4a47dfd8bb93d9fbab79c6ae50492c5d258141419c03a28c023adf"
           actual=$(sha256sum scripts/integrity.sha256 | cut -d' ' -f1)
           if [ "$expected" != "$actual" ]; then
             echo "scripts/integrity.sha256 змінився, а пін у цьому workflow — ні."
@@ -49,6 +53,46 @@ jobs:
 
       - name: Traceability IDs
         run: python3 scripts/check-ids.py
+
+      # Дубль .githooks/commit-msg на сервері: до цього кроку traceability
+      # «до коміту» трималася лише клієнтським хуком, і `--no-verify` (або
+      # будь-який його обхід) клав у main коміт без ID, а CI був зелений.
+      # Ті самі два grep -E, що в хуку. Merge-коміти виключено (--no-merges) —
+      # у хуку це MERGE_HEAD; Revert звільнено від типу, але не від ID.
+      - name: Commit subjects
+        env:
+          BEFORE: ${{ github.event.before }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          # PR: усе між базою і HEAD. Push: між before і sha; нова гілка
+          # (before = 0000…) або before, якого вже немає (force push) — лише HEAD.
+          if [ -n "$BASE_REF" ]; then
+            range="origin/$BASE_REF..HEAD"
+          elif [ -n "$BEFORE" ] && ! echo "$BEFORE" | grep -qE '^0+$' \
+               && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            range="$BEFORE..${{ github.sha }}"
+          else
+            range="-1 HEAD"
+          fi
+          echo "перевіряю: $range"
+          fail=0
+          while IFS= read -r msg; do
+            [ -z "$msg" ] && continue
+            case "$msg" in
+              'Revert "'*) ;;
+              *)
+                if ! printf '%s' "$msg" | grep -qE '^(feat|fix|refactor|test|docs|chore|build|ci|revert)(\([a-z0-9-]+\))?: '; then
+                  echo "немає '<type>: ' у темі коміту: $msg"; fail=1; continue
+                fi ;;
+            esac
+            if ! printf '%s' "$msg" | grep -qE '(^|[^A-Za-z0-9-])(FR|DR|NFR|IR|TASK|SLICE)-[0-9]{3}([^0-9-]|$)'; then
+              echo "немає ID вимоги або задачі в темі коміту: $msg"; fail=1
+            fi
+          done < <(git log --no-merges --format=%s $range)
+          if [ "$fail" != 0 ]; then
+            echo "Клієнтський commit-msg це ловить; --no-verify його зняв. Виправ теми (rebase) — CI не приймає коміт без ID."
+            exit 1
+          fi
 
       # Правила зберігаються в LF. Якщо в репозиторій просочився CRLF —
       # хеші зламаються у наступного, хто клонує.

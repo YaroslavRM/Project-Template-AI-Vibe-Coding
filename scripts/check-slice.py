@@ -17,6 +17,17 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+
+# The console's code page, not this script's own choice, decided the output
+# encoding before this: cp1251 on a default Windows terminal. That silently
+# mangled every non-ASCII character in these messages into mojibake for every
+# reader downstream (MinTTY, the agent's own tool output, the other check
+# script that decodes this one's stdout as UTF-8) and, worse, crashed with
+# UnicodeEncodeError the moment a printed line held a character outside
+# cp1251 — which skipped whatever check was about to print it. See
+# RulesForAIVibeCoding.md / README.md, section Windows.
+for _stream in (sys.stdout, sys.stderr):
+    _stream.reconfigure(encoding="utf-8", errors="replace")
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -204,6 +215,30 @@ def slice_block(text: str, slice_id: str) -> list[str]:
     return block
 
 
+def section(text: str, heading_substring: str) -> list[str]:
+    """Lines from the heading containing `heading_substring` to the next heading.
+
+    Used to keep the Progress Log check inside the Progress Log section: a
+    dated table row naming the slice can appear elsewhere in BACKLOG.md (a
+    Release Plan row, for instance) and satisfy a check that searched the
+    whole document without a single row ever being added to the actual log.
+    """
+    lines = text.splitlines()
+    start = None
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith("#") and heading_substring in line:
+            start = i
+            break
+    if start is None:
+        return []
+    block = [lines[start]]
+    for line in lines[start + 1:]:
+        if line.lstrip().startswith("#"):
+            break
+        block.append(line)
+    return block
+
+
 def main() -> int:
     if len(sys.argv) < 2 or not ID_ARG.match(sys.argv[1]):
         print("usage: python3 scripts/check-slice.py SLICE-014 | TASK-007")
@@ -227,12 +262,18 @@ def main() -> int:
         f"{slice_id} status is DONE or BLOCKED (found: {statuses[0] if statuses else 'none'})",
     )
 
-    # Progress Log row: any table row carrying both a date and the ID.
-    logged = any(
-        slice_id in line and DATE.search(line) and line.strip().startswith("|")
-        for line in backlog.splitlines()
-    )
-    check(logged, f"Progress Log has a dated row for {slice_id}")
+    # Progress Log row: a table row carrying both a date and the ID, inside
+    # the Progress Log section itself — not any dated row anywhere in the
+    # document that happens to mention the ID (a Release Plan row, say).
+    progress_log = section(backlog, "Progress Log")
+    if not progress_log:
+        check(False, "docs/BACKLOG.md has no Progress Log section")
+    else:
+        logged = any(
+            slice_id in line and DATE.search(line) and line.strip().startswith("|")
+            for line in progress_log
+        )
+        check(logged, f"Progress Log has a dated row for {slice_id}")
 
     # Every requirement the slice claims is traceable into source/.
     claimed = sorted(set(REQ_ID.findall(block_text)))
@@ -277,19 +318,47 @@ def main() -> int:
             + (", ".join(untested) or "ok"),
         )
 
-    # New TODO/FIXME must come with an open question.
-    diff = git("diff", "HEAD", "--unified=0")
-    added_markers = [
-        ln for ln in diff.splitlines()
-        if ln.startswith("+") and not ln.startswith("+++")
-        and re.search(r"\b(TODO|FIXME)\b", ln)
+    # New TODO/FIXME must come with an open question. Checked two ways: a
+    # diff against HEAD for changes to tracked content, and a directory
+    # listing for brand-new files, which `git diff HEAD` never sees until
+    # they are staged — a fresh file with a TODO used to pass silently.
+    diff = git_out("diff", "HEAD", "--unified=0")
+    if diff is None:
+        # A repo with no HEAD yet (the very first commit) fails this diff
+        # outright; git() used to fold that failure into "", which read as
+        # "nothing changed" and passed the check on a check that never ran.
+        check(False, "git diff HEAD failed — TODO/FIXME check could not run")
+        added_markers: list[str] = []
+    else:
+        added_markers = [
+            ln for ln in diff.splitlines()
+            if ln.startswith("+") and not ln.startswith("+++")
+            and re.search(r"\b(TODO|FIXME)\b", ln)
+        ]
+
+    untracked = git_out(
+        "ls-files", "-z", "--others", "--exclude-standard", "--", "source", "docs"
+    ) or ""
+    untracked_paths = [f for f in untracked.split("\0") if f]
+    new_marker_files = [
+        rel for rel in untracked_paths
+        if (ROOT / rel).suffix.lower() in TEXT_SUFFIXES
+        and re.search(r"\b(TODO|FIXME)\b", read(ROOT / rel))
     ]
-    if added_markers:
-        touched_oq = "docs/OPEN-QUESTIONS.md" in git("diff", "HEAD", "--name-only")
-        check(touched_oq, f"{len(added_markers)} new TODO/FIXME — docs/OPEN-QUESTIONS.md updated")
+
+    if added_markers or new_marker_files:
+        changed = (git_out("diff", "HEAD", "--name-only") or "").splitlines()
+        touched_oq = (
+            "docs/OPEN-QUESTIONS.md" in changed
+            or "docs/OPEN-QUESTIONS.md" in untracked_paths
+        )
+        total = len(added_markers) + len(new_marker_files)
+        check(touched_oq, f"{total} new TODO/FIXME — docs/OPEN-QUESTIONS.md updated")
         for ln in added_markers[:5]:
             print(f"       {ln.strip()[:100]}")
-    else:
+        for rel in new_marker_files[:5]:
+            print(f"       {rel} (new file)")
+    elif diff is not None:
         check(True, "no new TODO/FIXME in the diff")
 
     print()

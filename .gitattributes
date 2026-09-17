@@ -1,6 +1,6 @@
 # LF у репозиторії для всього текстового.
 # Критично для RulesForAIVibeCoding.md: при core.autocrlf=true на Windows
-# робоча копія отримала б CRLF, sha256 у scripts/rules.sha256 не збігався б
+# робоча копія отримала б CRLF, sha256 у scripts/integrity.sha256 не збігався б
 # ніколи, і єдиним «виходом» став би --fix, тобто затирання baseline.
 * text=auto eol=lf
 

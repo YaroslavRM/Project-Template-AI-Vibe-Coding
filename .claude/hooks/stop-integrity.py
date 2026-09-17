@@ -19,6 +19,17 @@ import json
 import os
 import subprocess
 import sys
+
+# The console's code page, not this script's own choice, decided the output
+# encoding before this: cp1251 on a default Windows terminal. That silently
+# mangled every non-ASCII character in these messages into mojibake for every
+# reader downstream (MinTTY, the agent's own tool output, the other check
+# script that decodes this one's stdout as UTF-8) and, worse, crashed with
+# UnicodeEncodeError the moment a printed line held a character outside
+# cp1251 — which skipped whatever check was about to print it. See
+# RulesForAIVibeCoding.md / README.md, section Windows.
+for _stream in (sys.stdout, sys.stderr):
+    _stream.reconfigure(encoding="utf-8", errors="replace")
 from pathlib import Path
 
 TIMEOUT = 120
@@ -55,9 +66,14 @@ def main() -> int:
         result = subprocess.run(
             [sys.executable, str(script)],
             cwd=str(root), capture_output=True, text=True, timeout=TIMEOUT,
-            # Without this the child's output is decoded with the console code
-            # page on Windows, and every em dash in the check's own messages
-            # reaches the agent as a replacement character.
+            # This decodes the child's stdout/stderr as UTF-8. That only
+            # helps once the child itself writes UTF-8 (see the reconfigure
+            # call near the top of this file and of the check scripts) —
+            # decoding as UTF-8 a stream the child wrote in the console's own
+            # code page (cp1251 on a default Windows terminal) is what
+            # produced the replacement characters, not what fixed them.
+            # errors="replace" is kept as a safety net for a genuine mismatch,
+            # not as the fix.
             encoding="utf-8", errors="replace",
         )
     except (OSError, subprocess.SubprocessError) as exc:

@@ -24,6 +24,17 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+
+# The console's code page, not this script's own choice, decided the output
+# encoding before this: cp1251 on a default Windows terminal. That silently
+# mangled every non-ASCII character in these messages into mojibake for every
+# reader downstream (MinTTY, the agent's own tool output, the other check
+# script that decodes this one's stdout as UTF-8) and, worse, crashed with
+# UnicodeEncodeError the moment a printed line held a character outside
+# cp1251 — which skipped whatever check was about to print it. See
+# RulesForAIVibeCoding.md / README.md, section Windows.
+for _stream in (sys.stdout, sys.stderr):
+    _stream.reconfigure(encoding="utf-8", errors="replace")
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent

@@ -48,6 +48,17 @@ import json
 import re
 import sys
 
+# The console's code page, not this script's own choice, decided the output
+# encoding before this: cp1251 on a default Windows terminal. That silently
+# mangled every non-ASCII character in these messages into mojibake for every
+# reader downstream (MinTTY, the agent's own tool output, the other check
+# script that decodes this one's stdout as UTF-8) and, worse, crashed with
+# UnicodeEncodeError the moment a printed line held a character outside
+# cp1251 — which skipped whatever check was about to print it. See
+# RulesForAIVibeCoding.md / README.md, section Windows.
+for _stream in (sys.stdout, sys.stderr):
+    _stream.reconfigure(encoding="utf-8", errors="replace")
+
 # --- reading the command ----------------------------------------------------
 
 def segments(command: str) -> list[str]:
@@ -175,7 +186,7 @@ def manifest_violation(segs: list[str]) -> str | None:
 
 # --- deleting ---------------------------------------------------------------
 
-TMPBIN = "tmpBin/"
+TMPBIN = "tmpBin"
 DELETE_HEAD = re.compile(r"^(?:sudo\s+)?(?:rm|unlink|truncate)\b")
 FIND_DELETE = re.compile(r"^(?:sudo\s+)?find\b[\s\S]*?(?:\s-delete\b|-exec\s+rm\b)")
 CD_HEAD = re.compile(r"^cd\s+(?P<path>[^\s;&|]+)")
@@ -186,18 +197,23 @@ def _slash(text: str) -> str:
     return text.replace("\\", "/")
 
 
+def _segments(path: str) -> list[str]:
+    return [p for p in _slash(path).split("/") if p not in ("", ".")]
+
+
 def _under_tmpbin(target: str, cwd_inside: bool) -> bool:
-    target = _slash(target.strip("\"'"))
-    if ".." in target:
+    target = target.strip("\"'")
+    if ".." in _segments(target):
         return False
-    if TMPBIN in target:
+    if TMPBIN in _segments(target):
         return True
     # A relative path while the shell already sits inside tmpBin is inside it
     # too. This is why the hook reads `cwd` from the payload: without it a bare
     # `rm scratch.txt` typed in tmpBin was refused as "the owner's file", which
     # was both wrong and the only real false positive left after the first live
     # session.
-    return cwd_inside and not target.startswith("/") and not WIN_DRIVE.match(target)
+    t = _slash(target)
+    return cwd_inside and not t.startswith("/") and not t.startswith("~") and not WIN_DRIVE.match(t)
 
 
 def _rm_targets(tokens: list[str]) -> list[str]:
@@ -213,20 +229,53 @@ def _find_roots(tokens: list[str]) -> list[str]:
     return roots or ["."]
 
 
+def _apply_cd(segs: list[str], path: str) -> list[str]:
+    """Best-effort tracking of the shell's directory as a segment stack.
+
+    Used only to decide whether the shell sits inside tmpBin/. An absolute
+    path, a home path (~) or a Windows drive replaces the stack outright
+    rather than being read as "still relative, so still inside" — that
+    misreading let `cd D:\\elsewhere` or `cd C:/other` after a start inside
+    tmpBin keep the exemption alive for a delete anywhere on disk. `..` pops a
+    segment instead of being ignored, so `cd ..` from tmpBin/sandbox lands
+    back in tmpBin (still exempt) while `cd ../..` from the same place leaves
+    it (exempt lifted) — both were wrong with a plain substring check.
+    """
+    p = path.strip("\"'")
+    sp = _slash(p)
+    if not p:
+        return segs
+    if sp.startswith("~") or sp.startswith("/") or WIN_DRIVE.match(sp):
+        return _segments(sp)
+    new = list(segs)
+    for part in sp.split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if new:
+                new.pop()
+        else:
+            new.append(part)
+    return new
+
+
 def delete_violation(segs: list[str], cwd: str) -> str | None:
     """Deleting is the owner's, except inside the agent's own scratch folder.
 
     Covers rm, unlink, truncate and `find -delete`, because they differ only in
     spelling. The exemption is decided per segment, and follows a `cd` into
-    tmpBin as well as the shell's starting directory.
+    tmpBin as well as the shell's starting directory. The shell's directory is
+    tracked as a path-segment stack (_apply_cd), not a boolean toggled by
+    substring matching — see its docstring for the two cases that broke.
     """
-    inside = TMPBIN in _slash(cwd)
+    cwd_segs = _segments(cwd)
+    inside = TMPBIN in cwd_segs
     for seg in segs:
         plain = unquoted(seg)
         cd = CD_HEAD.match(plain)
         if cd:
-            path = cd.group("path")
-            inside = TMPBIN in _slash(path) or (inside and not path.startswith(("/", "~")))
+            cwd_segs = _apply_cd(cwd_segs, cd.group("path"))
+            inside = TMPBIN in cwd_segs
             continue
         tokens = plain.split()[1:]
         if FIND_DELETE.match(plain):

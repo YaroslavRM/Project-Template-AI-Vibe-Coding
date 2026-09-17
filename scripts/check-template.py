@@ -37,8 +37,20 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import shutil
 import subprocess
 import sys
+
+# The console's code page, not this script's own choice, decided the output
+# encoding before this: cp1251 on a default Windows terminal. That silently
+# mangled every non-ASCII character in these messages into mojibake for every
+# reader downstream (MinTTY, the agent's own tool output, the other check
+# script that decodes this one's stdout as UTF-8) and, worse, crashed with
+# UnicodeEncodeError the moment a printed line held a character outside
+# cp1251 — which skipped whatever check was about to print it. See
+# RulesForAIVibeCoding.md / README.md, section Windows.
+for _stream in (sys.stdout, sys.stderr):
+    _stream.reconfigure(encoding="utf-8", errors="replace")
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -313,6 +325,24 @@ try:
 except (OSError, subprocess.SubprocessError):
     warnings.append("git not available — hooks not checked")
 
+# --- 4b. python3 is not the Windows Store stub ------------------------------
+# .claude/settings.json invokes python3 for both agent hooks. A fresh Windows
+# machine commonly has a Microsoft Store shim ahead of any real install on
+# PATH: it opens the Store and exits 9009 instead of running Python. `command
+# -v python3` (used by .githooks/pre-commit) reports success for it anyway, so
+# nothing else here would notice — the hooks would simply never run, silently,
+# while this very check kept saying OK. See README.md, section Windows.
+if os.name == "nt":
+    python3_path = shutil.which("python3")
+    if python3_path and "WindowsApps" in python3_path:
+        errors.append(
+            f"python3 resolves to the Windows Store stub ({python3_path}) — "
+            "it opens the Store instead of running Python, so "
+            ".claude/hooks/bash-guard.py and stop-integrity.py never run. "
+            "See README.md, section Windows, to make python3 a real "
+            "interpreter."
+        )
+
 # --- 5. Non-blocking hygiene warnings ---------------------------------------
 # The placeholder string alone is not enough: an agent that deletes the
 # blockquote leaves an empty document that looks filled in. So each document
@@ -327,7 +357,20 @@ for rel in ("docs/FRS.md", "docs/ARCHITECTURE.md", "docs/BACKLOG.md"):
     path = ROOT / rel
     if not path.is_file():
         continue
-    text = path.read_text(encoding="utf-8")
+    raw = path.read_bytes()
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff") or b"\x00" in raw[:64]:
+        # A document saved as UTF-16 (Notepad's "Unicode", or `>` under
+        # Windows PowerShell 5.1) used to fail utf-8 decoding here with a
+        # traceback instead of a diagnosis — and check-ids.py, reading the
+        # same file, saw what looks like an empty document and quietly
+        # skipped itself (exit 0) rather than reporting anything wrong.
+        warnings.append(
+            f"{rel} is not UTF-8 (looks like UTF-16) — every check here reads "
+            f"it as UTF-8, so its content is not actually being checked. "
+            f"Re-save it as UTF-8."
+        )
+        continue
+    text = path.read_text(encoding="utf-8", errors="replace")
     marker = DOC_MARKERS.get(rel)
     if PLACEHOLDER.search(text):
         warnings.append(f"{rel} is still the empty template")
@@ -344,7 +387,7 @@ VERIFY_ROW = re.compile(
 arch = ROOT / "docs/ARCHITECTURE.md"
 if arch.is_file():
     found_row = False
-    for line in arch.read_text(encoding="utf-8").splitlines():
+    for line in arch.read_text(encoding="utf-8", errors="replace").splitlines():
         m = VERIFY_ROW.match(line)
         if not m:
             continue

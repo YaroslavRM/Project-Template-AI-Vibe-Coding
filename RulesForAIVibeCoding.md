@@ -137,6 +137,21 @@ When you need a requirement, search the FRS for its ID and read what is around i
 
 If you cannot find an ID, or the AC is not written down: **say that**. An AC that you reconstructed is worse than a missing one, because it looks like agreement.
 
+### Asking questions
+
+An ID is an index, not a question. A bare `FR-014` in front of me means I open `FRS.md` before I can even tell what you are asking — and that lookup costs more than the question saved by leaving the words out.
+
+So every ID you put in a message to me — a clarifying question, an options list, a diff summary — carries a short gloss in parentheses, taken from what the FRS actually says:
+
+```
+FR-014 (фільтр замовлень за статусом): AC каже «статус зі списку», а
+статусів у DR-003 (довідник статусів) шість. Фільтр по одному чи по кількох?
+```
+
+When the question does not actually depend on which ID it belongs to, better still: ask it in plain words and leave the ID at the end as a reference.
+
+The gloss is three or four words for orientation, not a paraphrase standing in for the requirement — *Reading the docs* still governs the text you quote. And this applies to what you write **to me**, not to `BACKLOG.md` or the Progress Log, where a bare ID is the point.
+
 ### Branching
 
 Finished work goes straight to `main`. There is no branch per slice and no

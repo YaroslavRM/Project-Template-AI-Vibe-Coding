@@ -241,8 +241,11 @@ PROTECTED_READ = re.compile(
     r"|for|echo|printf|test|\["
     r"|sha256sum|shasum|md5sum"
     r"|find\b(?![\s\S]*\s-(?:delete|exec|execdir|ok|okdir|fprint0?|fprintf|fls)\b)"
-    r"|(?:\S*/)?(?:check-template|check-slice|check-ids|bash-guard|stop-integrity)\.py"
-    r"|(?:\S*/)?\.githooks/(?:pre-commit|commit-msg)"
+    # The path in front is path characters only. `\S*/` also took
+    # `open(scripts/` — a line of a Python heredoc writing the file — for the
+    # directory of a script being run, and let the write through.
+    r"|(?:[\w.~:-]*[/\\])*(?:check-template|check-slice|check-ids|bash-guard|stop-integrity)\.py"
+    r"|(?:[\w.~:-]*[/\\])*\.githooks[/\\](?:pre-commit|commit-msg)"
     r"|git\s+(?:diff|show|log)\b(?![\s\S]*--output)"
     r"|git\s+(?:status|ls-files|blame|add|commit|grep)"
     r"|sort\b(?![\s\S]*\s(?:-[A-Za-z]*o|--output))"
@@ -750,13 +753,64 @@ PER_SEGMENT: list[tuple[re.Pattern[str], str]] = [
 ]
 
 
+# --- heredocs that carry data -----------------------------------------------
+
+# `<<WORD`, `<<'WORD'`, `<<-"WORD"`; not the here-string `<<<`.
+HEREDOC = re.compile(r"(?<!<)<<(?!<)(-?)\s*(['\"]?)([A-Za-z_]\w*)\2")
+# Commands whose heredoc body is text, not something that runs: a commit, tag
+# or note message, a file cat or tee writes, a gh body. `git apply` is not
+# here — its body is a patch, and a patch can rewrite a pinned file.
+DATA_HEREDOC_CMD = re.compile(
+    r"^(?:[A-Za-z_]\w*=\S*\s+)*(?:cat|tee|gh"
+    r"|git(?:\s+-\S*(?:\s+[^-\s;&|]\S*)?)*\s+(?:commit|tag|notes))\b"
+)
+
+
+def drop_data_heredocs(command: str) -> str:
+    """The command with the bodies of data heredocs removed.
+
+    Every line of a heredoc used to be read as a command of its own. A commit
+    message passed as `git commit -F - <<'EOF'` with a line `- settings.json:
+    ask on .gitattributes` was refused as a write to .gitattributes, a line
+    `- rm the flag` would have been a delete, and an apostrophe in the text
+    opened a quote that swallowed the rest of the command. That fired on the
+    commit that shipped the previous round of these fixes.
+
+    Only a body that cannot run is dropped: the heredoc belongs to one of
+    DATA_HEREDOC_CMD, and its output is not piped on (`cat <<EOF | sh` runs
+    it). A heredoc fed to an interpreter — `python3 - <<EOF` — is a program,
+    exactly what the text rules exist to read, and stays. The line that opens
+    the heredoc always stays, so `cat > <pinned> <<EOF` is still a write.
+    """
+    lines = command.split("\n")
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        out.append(line)
+        i += 1
+        for m in HEREDOC.finditer(line):
+            strip_tabs, word = m.group(1) == "-", m.group(3)
+            before = re.split(r"&&|\|\||[;|&]", line[: m.start()])[-1].strip()
+            is_data = bool(DATA_HEREDOC_CMD.match(before)) and "|" not in line[m.end():]
+            while i < len(lines):
+                body = lines[i]
+                i += 1
+                end = (body.lstrip("\t") if strip_tabs else body).rstrip("\r") == word
+                if end or not is_data:
+                    out.append(body)
+                if end:
+                    break
+    return "\n".join(out)
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):
         return 0
 
-    command = str(payload.get("tool_input", {}).get("command", ""))
+    command = drop_data_heredocs(str(payload.get("tool_input", {}).get("command", "")))
     if not command:
         return 0
 

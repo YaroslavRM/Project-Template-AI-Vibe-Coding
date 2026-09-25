@@ -163,6 +163,31 @@ decided there; if they are not, it is a question, not a tool you pick.
 * UI tests, their tooling (browsers, drivers) and their baselines never reach
   test or prod. `deploy/` ships only what the application needs at runtime.
 
+### Settings that someone else will change
+
+A configuration file, or a settings panel in the UI, that an administrator or a
+user is expected to change carries its own explanation. Whoever changes it will
+not have read the FRS.
+
+For every setting, next to it — a comment in the file, a hint or help text in
+the panel:
+
+* what it does;
+* allowed values, range, units;
+* the default;
+* what a change takes effect on — immediately, after a restart, after a redeploy;
+* for a secret: where to obtain it. Never a real value — see *Secrets*.
+
+The explanation says what the FRS and `ARCHITECTURE.md` say. If you do not know
+what a setting means, what it accepts, or what its default is, that is a
+question — not a plausible comment. A comment you made up looks like agreement.
+
+If the chosen file format cannot hold comments, do not invent workarounds such
+as `"_comment"` keys that the application then has to ignore. Say so and ask.
+
+This covers what administrators and users configure. Development tooling —
+linter, test-runner, editor configs — is not in scope.
+
 ### Asking questions
 
 An ID is an index, not a question. A bare `FR-014` in front of me means I open `FRS.md` before I can even tell what you are asking — and that lookup costs more than the question saved by leaving the words out.

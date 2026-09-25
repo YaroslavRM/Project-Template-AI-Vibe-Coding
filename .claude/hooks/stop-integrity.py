@@ -27,7 +27,7 @@ import sys
 # script that decodes this one's stdout as UTF-8) and, worse, crashed with
 # UnicodeEncodeError the moment a printed line held a character outside
 # cp1251 — which skipped whatever check was about to print it. See
-# RulesForAIVibeCoding.md / README.md, section Windows.
+# README.md, section Windows.
 for _stream in (sys.stdout, sys.stderr):
     _stream.reconfigure(encoding="utf-8", errors="replace")
 from pathlib import Path

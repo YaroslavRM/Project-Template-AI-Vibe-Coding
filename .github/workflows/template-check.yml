@@ -28,7 +28,7 @@ jobs:
       # рядок, і воно видно в diff.
       - name: Manifest pin
         run: |
-          expected="15e2b8e96f09a934c7bea64c57e9184421d89f0d9e8554f17bf27c2e89a7ff32"
+          expected="8ab4bce96f215a5a5529e71012a7e3cb262e4b4f09c795b5ba261406df0fd3ec"
           actual=$(sha256sum scripts/integrity.sha256 | cut -d' ' -f1)
           if [ "$expected" != "$actual" ]; then
             echo "scripts/integrity.sha256 змінився, а пін у цьому workflow — ні."
@@ -67,14 +67,26 @@ jobs:
         env:
           BEFORE: ${{ github.event.before }}
           BASE_REF: ${{ github.base_ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          # PR: усе між базою і HEAD. Push: між before і sha; нова гілка
-          # (before = 0000…) або before, якого вже немає (force push) — лише HEAD.
+          # PR: усе між базою і HEAD. Push: між before і sha. Нова гілка
+          # (before = 0000…): усе, чого немає в основній гілці, — раніше лише
+          # HEAD, і решта комітів нової гілки не перевірялася зовсім; перший
+          # push самої основної гілки — уся її історія (кореневий коміт однаково
+          # виключено нижче). before, якого вже немає (force push), — лише HEAD.
+          new_branch=0
+          echo "$BEFORE" | grep -qE '^0+$' && new_branch=1
           if [ -n "$BASE_REF" ]; then
             range="origin/$BASE_REF..HEAD"
-          elif [ -n "$BEFORE" ] && ! echo "$BEFORE" | grep -qE '^0+$' \
+          elif [ -n "$BEFORE" ] && [ "$new_branch" = 0 ] \
                && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
             range="$BEFORE..${{ github.sha }}"
+          elif [ "$new_branch" = 1 ] && [ "$REF_NAME" = "$DEFAULT_BRANCH" ]; then
+            range="${{ github.sha }}"
+          elif [ "$new_branch" = 1 ] \
+               && git rev-parse -q --verify "origin/$DEFAULT_BRANCH" >/dev/null; then
+            range="origin/$DEFAULT_BRANCH..${{ github.sha }}"
           else
             range="-1 HEAD"
           fi

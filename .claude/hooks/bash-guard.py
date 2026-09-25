@@ -58,7 +58,7 @@ import sys
 # script that decodes this one's stdout as UTF-8) and, worse, crashed with
 # UnicodeEncodeError the moment a printed line held a character outside
 # cp1251 — which skipped whatever check was about to print it. See
-# RulesForAIVibeCoding.md / README.md, section Windows.
+# README.md, section Windows.
 for _stream in (sys.stdout, sys.stderr):
     _stream.reconfigure(encoding="utf-8", errors="replace")
 
@@ -713,6 +713,21 @@ ASK_PER_SEGMENT: list[tuple[re.Pattern[str], str]] = [
         ),
         ASK_MESSAGE,
     ),
+    (
+        # A wip/ branch is deleted on the owner's OK (rules, section
+        # Branching). `-d` refuses an unmerged branch, but one finished through
+        # `merge --squash` always looks unmerged, so `-D` is the next thing
+        # reached for — and an unfinished branch deleted that way was the only
+        # copy of its work. Asked, not blocked: after the owner's yes it is the
+        # ordinary last step of a slice.
+        re.compile(
+            r"^" + GIT_GLOBALS
+            + r"branch\b[\s\S]*?\s(?:-[A-Za-z]*[dD][A-Za-z]*|--delete)(?![\w-])"
+        ),
+        "this deletes a branch. Rules, section Branching: a wip/ branch is "
+        "deleted on the owner's OK, and an unfinished one is the only copy of "
+        "its work.",
+    ),
 ]
 
 # Applied per segment, on the `nq` reading: these describe one command, and
@@ -757,17 +772,60 @@ PER_SEGMENT: list[tuple[re.Pattern[str], str]] = [
 
 # `<<WORD`, `<<'WORD'`, `<<-"WORD"`; not the here-string `<<<`.
 HEREDOC = re.compile(r"(?<!<)<<(?!<)(-?)\s*(['\"]?)([A-Za-z_]\w*)\2")
-# Commands whose heredoc body is text, not something that runs: a commit, tag
-# or note message, a file cat or tee writes, a gh body. `git apply` is not
-# here — its body is a patch, and a patch can rewrite a pinned file.
+# Commands whose heredoc body is a message and nothing else: a commit, tag or
+# note message, a gh body. `cat` and `tee` used to be here as well, and that
+# let `cat <<EOF > x.sh && bash x.sh` run a body nobody had read — what they
+# write can be run a moment later. `git apply` is not here either: its body is
+# a patch, and a patch can rewrite a pinned file.
 DATA_HEREDOC_CMD = re.compile(
-    r"^(?:[A-Za-z_]\w*=\S*\s+)*(?:cat|tee|gh"
+    r"^(?:[A-Za-z_]\w*=\S*\s+)*(?:gh"
     r"|git(?:\s+-\S*(?:\s+[^-\s;&|]\S*)?)*\s+(?:commit|tag|notes))\b"
 )
 
 
+def _inside_text(prefix: str) -> bool:
+    """True when the end of `prefix` sits inside a quoted string.
+
+    `git commit -m "see <<EOF"` opens no heredoc — to the shell the `<<` is two
+    characters of the message — and reading it as one dropped every following
+    line, an `rm` included, up to a line that said EOF. A `$(...)` or a
+    backtick inside double quotes is code again: `git commit -m "$(cat
+    <<'EOF'` is the ordinary way to pass a commit message, and that heredoc is
+    real.
+    """
+    stack: list[str] = []
+    i, n = 0, len(prefix)
+    while i < n:
+        c = prefix[i]
+        top = stack[-1] if stack else ""
+        if top == "'":
+            if c == "'":
+                stack.pop()
+        elif c == "\\":
+            i += 1
+        elif c == '"':
+            if top == '"':
+                stack.pop()
+            else:
+                stack.append('"')
+        elif c == "'" and top != '"':
+            stack.append("'")
+        elif prefix.startswith("$(", i):
+            stack.append("$(")
+            i += 1
+        elif c == ")" and top == "$(":
+            stack.pop()
+        elif c == "`":
+            if top == "`":
+                stack.pop()
+            else:
+                stack.append("`")
+        i += 1
+    return bool(stack) and stack[-1] in ("'", '"')
+
+
 def drop_data_heredocs(command: str) -> str:
-    """The command with the bodies of data heredocs removed.
+    """The command with the bodies of message heredocs removed.
 
     Every line of a heredoc used to be read as a command of its own. A commit
     message passed as `git commit -F - <<'EOF'` with a line `- settings.json:
@@ -776,11 +834,15 @@ def drop_data_heredocs(command: str) -> str:
     opened a quote that swallowed the rest of the command. That fired on the
     commit that shipped the previous round of these fixes.
 
-    Only a body that cannot run is dropped: the heredoc belongs to one of
-    DATA_HEREDOC_CMD, and its output is not piped on (`cat <<EOF | sh` runs
-    it). A heredoc fed to an interpreter — `python3 - <<EOF` — is a program,
-    exactly what the text rules exist to read, and stays. The line that opens
-    the heredoc always stays, so `cat > <pinned> <<EOF` is still a write.
+    A body is dropped only when it certainly is one, and certainly cannot run:
+    * the `<<` is code, not text inside quotes (_inside_text);
+    * it belongs to one of DATA_HEREDOC_CMD, and its output is not piped on
+      (`... <<EOF | sh` runs it);
+    * its closing line is there. Without one there is no telling where the
+      body would end, and the hook reads on rather than guess.
+    A heredoc fed to an interpreter — `python3 - <<EOF` — is a program, exactly
+    what the text rules exist to read, and stays. The line that opens the
+    heredoc always stays, so `cat > <pinned> <<EOF` is still a write.
     """
     lines = command.split("\n")
     out: list[str] = []
@@ -790,19 +852,25 @@ def drop_data_heredocs(command: str) -> str:
         out.append(line)
         i += 1
         for m in HEREDOC.finditer(line):
+            if _inside_text(line[: m.start()]):
+                continue
             strip_tabs, word = m.group(1) == "-", m.group(3)
+            end = next(
+                (
+                    j for j in range(i, len(lines))
+                    if (lines[j].lstrip("\t") if strip_tabs else lines[j]).rstrip("\r") == word
+                ),
+                None,
+            )
+            if end is None:
+                break
             before = re.split(r"&&|\|\||[;|&]", line[: m.start()])[-1].strip()
             is_data = bool(DATA_HEREDOC_CMD.match(before)) and "|" not in line[m.end():]
-            while i < len(lines):
-                body = lines[i]
-                i += 1
-                end = (body.lstrip("\t") if strip_tabs else body).rstrip("\r") == word
-                if end or not is_data:
-                    out.append(body)
-                if end:
-                    break
+            if not is_data:
+                out.extend(lines[i:end])
+            out.append(lines[end])
+            i = end + 1
     return "\n".join(out)
-
 
 def main() -> int:
     try:

@@ -35,9 +35,10 @@ Codex — через скіл `slice-finish` (`.agents/skills/slice-finish/`).
 
    Перевірка бере вимоги зрізу лише з поля `**Вимоги:**` і шукає кожну **в
    назві тестового файла або тесту** під `source/` і `deploy/`, лише у файлах,
-   які є тестами (`test_*`, `*_test.*`, `*.spec.*`, `OrderTest.*`, `*.feature`,
-   `*.cy.*`, усе під `test/`, `tests/`, `spec/`, `__tests__/`, `e2e/`,
-   `integration_test/`). Приймається `FR-014`, `FR_014`, `FR014` у будь-якому регістрі —
+   які є тестами (`test_*`, `*_test.*`, `*.spec.*`, `*.cy.*`, `*.e2e.*`,
+   `*.feature`, `OrderTest.*` / `OrderTests.*` / `OrderSpec.*`, усе під
+   `test/`, `tests/`, `spec/`, `specs/`, `testing/`, `__tests__/`, `e2e/`,
+   `integration_test/`, `androidTest/`). Приймається `FR-014`, `FR_014`, `FR014` у будь-якому регістрі —
    тобто `test_fr_014_filter` годиться так само, як `test_FR_014_filter`, — а
    також ID, приклеєний до префікса тесту з великої літери: `TestFR014Filter`,
    `testFR014`.
@@ -67,16 +68,18 @@ Codex — через скіл `slice-finish` (`.agents/skills/slice-finish/`).
 підрозділ «If the slice could not be finished»; коротко:
 
 1. Скажи, де зупинився і що не вийшло.
-2. Незавершений код на `main` не йде: коміт у `wip/<fr-id>-<slice>`
-   (`git switch -c` забирає робоче дерево з собою; у коміт — лише код, тема
-   `feat: FR-0XX <опис>, unfinished`) або взагалі без коміту — і скажи, що
-   саме.
+2. Незавершений код на `main` не йде: коміт у `wip/<fr-id>-<slice>`, у задачі
+   без вимоги — `wip/<task-id>-<назва>` (`git switch -c` забирає робоче дерево
+   з собою; у коміт — лише код, тема `feat: FR-0XX <опис>, unfinished` або
+   `chore: TASK-0XX <опис>, unfinished`), потім `git switch main` — решта
+   робиться там, і наступна сесія почнеться там. Або взагалі без коміту — і
+   скажи, що саме.
 3. Закінчився лише час, а зріз ніщо не блокує, — поверни статус у `TODO` і на
    цьому все: наступний `/slice-start` знайде `wip/`-гілку.
 4. Зріз заблоковано — на `main`: `**Статус:** BLOCKED` з причиною (і в
    Coverage Map, якщо статус там продубльовано, плюс рядок у таблиці
-   *Blocked*), запис у `docs/OPEN-QUESTIONS.md`, що називає зріз, зі
-   `**Статус:** OPEN`, рядок Progress Log із `BLOCKED`. Прогони
+   *Blocked*), запис у `docs/OPEN-QUESTIONS.md`, чиє поле
+   `**Блокує:**` називає зріз, зі `**Статус:** OPEN`, рядок Progress Log із `BLOCKED`. Прогони
    `check-slice.py` і покажи вивід: для `BLOCKED` він перевіряє відкритий
    запис у `OPEN-QUESTIONS.md`, а не тести.
 5. Після мого ОК — коміт лише цих документів, на `main`:

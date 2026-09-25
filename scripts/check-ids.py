@@ -33,7 +33,7 @@ import sys
 # script that decodes this one's stdout as UTF-8) and, worse, crashed with
 # UnicodeEncodeError the moment a printed line held a character outside
 # cp1251 — which skipped whatever check was about to print it. See
-# RulesForAIVibeCoding.md / README.md, section Windows.
+# README.md, section Windows.
 for _stream in (sys.stdout, sys.stderr):
     _stream.reconfigure(encoding="utf-8", errors="replace")
 from pathlib import Path
@@ -235,6 +235,30 @@ for path in source_files():
         found_acs |= _in_names(NAME_AC_ID, names)
     report("requirement IDs", found_reqs - frs_reqs, str(rel))
     report("acceptance criteria", found_acs - frs_acs, str(rel))
+
+# --- Open questions that block work which does not exist -------------------
+# The chat sessions of steps 1 and 2 write OPEN-QUESTIONS.md entries before a
+# single slice exists, and an invented `**Блокує:** SLICE-003` lies in wait:
+# once a real SLICE-003 is planned — about something else — the entry reads as
+# its reason to be blocked, to check-slice.py and to /slice-start alike. Only
+# open entries count: an answered one blocks nothing any more.
+OQ = ROOT / "docs/OPEN-QUESTIONS.md"
+WORK_ID = re.compile(r"\b(?:SLICE|TASK)-\d{3}\b")
+WORK_HEADING = re.compile(r"(?m)^\s*#+\s*((?:SLICE|TASK)-\d{3})\b")
+if OQ.is_file():
+    planned = set(WORK_HEADING.findall(read(BACKLOG))) if BACKLOG.is_file() else set()
+    phantom: set[str] = set()
+    for entry in cs.oq_entries(read(OQ)):
+        if cs.entry_open(entry):
+            phantom |= set(WORK_ID.findall(cs.entry_field(entry, cs.BLOCKS_FIELD))) - planned
+    if phantom:
+        errors.append(
+            "docs/OPEN-QUESTIONS.md: open entries block "
+            + ", ".join(sorted(phantom))
+            + ", which docs/BACKLOG.md has no section for.\n"
+            "  Either the ID was invented before the backlog existed, or the work "
+            "was renamed. Editing an existing entry is the owner's — tell them."
+        )
 
 # --- ADR files referenced but absent ---------------------------------------
 

@@ -3,7 +3,7 @@
 | Файл | Призначення |
 |---|---|
 | `check-template.py` | enforcement-файли не змінені + структура на місці + `CLAUDE.md`/`AGENTS.md`/вказівники команд досі ведуть до правил + хуки увімкнені |
-| `check-ids.py` | traceability за ID: ніщо не посилається на вимогу, якої немає у FRS |
+| `check-ids.py` | traceability за ID: ніщо не посилається на вимогу, якої немає у FRS, а відкрите питання — на зріз, якого немає в BACKLOG |
 | `check-slice.py` | механічна частина Definition of Done для одного зрізу |
 | `integrity.sha256` | пінені хеші всіх enforcement-файлів |
 
@@ -56,7 +56,8 @@ git ls-files -z --cached --others --exclude-standard -- source deploy
 ## Маніфест
 
 `integrity.sha256` пінить не тільки правила, а й механізм, який їх виконує:
-три скрипти, обидва git-хуки, обидва хуки агента і `settings.json`.
+три скрипти, обидва git-хуки, обидва хуки агента, `settings.json` і
+`.gitattributes`.
 Пінити самі правила недостатньо — перевірка, переписана на `print("OK")`,
 проходить і pre-commit, і CI.
 

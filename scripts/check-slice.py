@@ -25,7 +25,7 @@ import sys
 # script that decodes this one's stdout as UTF-8) and, worse, crashed with
 # UnicodeEncodeError the moment a printed line held a character outside
 # cp1251 — which skipped whatever check was about to print it. See
-# RulesForAIVibeCoding.md / README.md, section Windows.
+# README.md, section Windows.
 for _stream in (sys.stdout, sys.stderr):
     _stream.reconfigure(encoding="utf-8", errors="replace")
 from pathlib import Path
@@ -101,6 +101,13 @@ TODO_MARKER = re.compile(
 # why SLICE-004 was blocked with no entry at all.
 OQ_ENTRY = re.compile(r"^\s*##\s+OQ-\d{3}\b")
 OQ_STATUS = re.compile(r"\b(OPEN|ANSWERED|DEFERRED)\b")
+# What an entry blocks. An entry names a slice only in this field:
+# `**Джерело:** Slice SLICE-001` says where a question came up, and an entry
+# raised during SLICE-001 about SLICE-002 used to count as the reason SLICE-001
+# was blocked — and, by the unblocking rule, kept it blocked.
+BLOCKS_FIELD = re.compile(
+    r"^\s*[-*]?\s*\*{0,2}\s*(?:Блокує|Blocks)\s*\*{0,2}\s*:", re.IGNORECASE
+)
 
 # Only the fallback for a working copy with no usable git — the real filter is
 # .gitignore, read through `git ls-files` in source_files(). Kept because a
@@ -386,7 +393,7 @@ def main() -> int:
         check(
             _open_entry_names(read(OQ), slice_id),
             f"docs/OPEN-QUESTIONS.md has an open entry (**Статус:** OPEN or "
-            f"DEFERRED) naming {slice_id} — why it is blocked",
+            f"DEFERRED) whose **Блокує:** names {slice_id} — why it is blocked",
         )
     elif claimed:
         # The rules require the test name to carry the FR-ID or an AC-ID of it.
@@ -403,9 +410,10 @@ def main() -> int:
         if not tests:
             print(
                 "WARN:  no test files found under source/ or deploy/. Looked for "
-                "names like test_*, *_test.*, *.spec.*, *.cy.*, *Test.*, "
-                "*.feature, and anything under test/ tests/ spec/ __tests__/ "
-                "e2e/ integration_test/."
+                "names like test_*, *_test.*, *.spec.*, *.cy.*, *.e2e.*, "
+                "*.feature, OrderTest.* / OrderTests.* / OrderSpec.*, and "
+                "anything under test/ tests/ spec/ specs/ testing/ __tests__/ "
+                "e2e/ integration_test/ androidTest/."
             )
         for path in tests:
             if len(found) == len(wanted):
@@ -579,14 +587,15 @@ def name_id_pattern(prefixes: list[str], number: str = r"\d{3}") -> str:
     )
 
 
-def _open_entry_names(text: str, ident: str) -> bool:
-    """True when an OPEN or DEFERRED entry of OPEN-QUESTIONS.md names `ident`.
+def oq_entries(text: str) -> list[list[str]]:
+    """The `## OQ-NNN` entries of OPEN-QUESTIONS.md, each a list of lines.
 
-    Entries are `## OQ-NNN` sections; code fences are skipped, so the format
-    sample is never an entry. An entry without a readable **Статус:** does not
-    count: the check says why rather than guessing it is open.
+    Code fences are skipped, so the format sample is never an entry, and any
+    other heading ends an entry — the lines under it belong to no entry at all.
+    check-ids.py reads the file through this as well.
     """
     entries: list[list[str]] = []
+    current: list[str] | None = None
     fenced = False
     for line in text.splitlines():
         if line.lstrip().startswith("```"):
@@ -595,20 +604,33 @@ def _open_entry_names(text: str, ident: str) -> bool:
         if fenced:
             continue
         if OQ_ENTRY.match(line):
-            entries.append([line])
+            current = [line]
+            entries.append(current)
         elif line.lstrip().startswith("#"):
-            entries.append([])  # another heading closes the entry
-        elif entries:
-            entries[-1].append(line)
+            current = None
+        elif current is not None:
+            current.append(line)
+    return entries
+
+
+def entry_field(entry: list[str], field: re.Pattern[str]) -> str:
+    return next((ln for ln in entry if field.match(ln)), "")
+
+
+def entry_open(entry: list[str]) -> bool:
+    """OPEN or DEFERRED. An entry without a readable **Статус:** is not open:
+    the check says why rather than guessing."""
+    found = OQ_STATUS.search(entry_field(entry, STATUS_FIELD))
+    return bool(found) and found.group(1) in {"OPEN", "DEFERRED"}
+
+
+def _open_entry_names(text: str, ident: str) -> bool:
+    """True when an OPEN or DEFERRED entry's **Блокує:** field names `ident`."""
     own = re.compile(rf"\b{re.escape(ident)}\b")
-    for entry in entries:
-        if not entry or not any(own.search(ln) for ln in entry):
-            continue
-        field = next((ln for ln in entry if STATUS_FIELD.match(ln)), "")
-        found = OQ_STATUS.search(field)
-        if found and found.group(1) in {"OPEN", "DEFERRED"}:
-            return True
-    return False
+    return any(
+        entry_open(e) and own.search(entry_field(e, BLOCKS_FIELD))
+        for e in oq_entries(text)
+    )
 
 
 def _acs_for(text: str, req: str) -> list[str]:

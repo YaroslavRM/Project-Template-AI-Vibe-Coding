@@ -15,8 +15,8 @@ Plus non-blocking warnings: documents still untouched, local verification
 command not filled in.
 
 The manifest covers the rules AND the machinery that enforces them: this
-script, the two other scripts, both git hooks, the agent hook scripts and the
-permission file.
+script, the two other scripts, both git hooks, the agent hook scripts, the
+permission file and .gitattributes.
 Hashing only the rules would leave the checker itself rewritable — and a
 checker that always prints OK passes both the commit hook and CI.
 
@@ -48,7 +48,7 @@ import sys
 # script that decodes this one's stdout as UTF-8) and, worse, crashed with
 # UnicodeEncodeError the moment a printed line held a character outside
 # cp1251 — which skipped whatever check was about to print it. See
-# RulesForAIVibeCoding.md / README.md, section Windows.
+# README.md, section Windows.
 for _stream in (sys.stdout, sys.stderr):
     _stream.reconfigure(encoding="utf-8", errors="replace")
 from pathlib import Path

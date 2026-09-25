@@ -243,7 +243,7 @@ Performance · Expected Load · Scalability · Availability/SLA · Security · P
 ### OQ-XXX — <коротке формулювання>
 **Відкрито:** YYYY-MM-DD
 **Джерело:** BA
-**Блокує:** FR-XXX, SLICE-XXX (або «не блокує»)
+**Блокує:** FR-XXX (або «не блокує»)
 **Питання:**
 **Варіанти / гіпотези:**
 **Статус:** OPEN
@@ -256,6 +256,11 @@ Performance · Expected Load · Scalability · Availability/SLA · Security · P
     третього рівня (`###`), щоб не ламати нумерацію розділів; у файлі OQ він
     стане `##`. Поля не скорочуй і не перейменовуй: інакше у файлі житимуть
     два формати.
+
+    У полі `**Блокує:**` — лише ID вимог. Зрізів (`SLICE-*`) на цьому кроці ще
+    не існує, їх нарізає крок 3: вигаданий номер згодом збігся б із чужим
+    справжнім зрізом і «блокував» би його (`scripts/check-ids.py` таке
+    відхилить).
 11. **Risks & Dependencies**
 12. **Traceability Matrix** — `Requirement ID | Requirement | Source | Priority | Status | AC ID`
 

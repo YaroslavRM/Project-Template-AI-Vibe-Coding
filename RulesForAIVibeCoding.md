@@ -232,9 +232,9 @@ itself is ceremony. `main` must be working after every commit; that is what
 makes step 5 non-negotiable.
 
 A branch exists for exactly one case: work that could not be finished in the
-session. It is named after the FR it belongs to — `wip/fr-014-order-filter` —
-and it is either finished by the next session that takes the slice or deleted
-on my OK. For a `BLOCKED` slice that is the session after it is unblocked (see
+session. It is named after the FR it belongs to — `wip/fr-014-order-filter`,
+or after the task when there is none, `wip/task-007-backup` — and it is
+either finished by the next session that takes the slice or deleted on my OK. For a `BLOCKED` slice that is the session after it is unblocked (see
 *If the slice could not be finished*); until then the branch waits. Nothing
 else lives on a branch.
 
@@ -268,7 +268,7 @@ Git Bash there is often no `python3` — use `python`; see the *Windows* section
 * the slice exists in `BACKLOG.md`, its `**Статус:**` field is `DONE` or `BLOCKED`, the Progress Log has a dated row for it with that same status
 * every requirement the slice claims — the IDs in its `**Вимоги:**` field, and nowhere else in its block — exists in the FRS
 * `DONE`: every claimed requirement is traceable into `source/`, or into `deploy/` for what the release tooling implements — the test name carries the FR-ID or an AC-ID of it
-* `BLOCKED`: `OPEN-QUESTIONS.md` has an entry that names the slice and is still open (`**Статус:** OPEN` or `DEFERRED`) — the reason it stopped. Its tests are not checked: its code is on a `wip/` branch or nowhere
+* `BLOCKED`: `OPEN-QUESTIONS.md` has an entry whose `**Блокує:**` field names the slice and that is still open (`**Статус:** OPEN` or `DEFERRED`) — the reason it stopped. Its tests are not checked: its code is on a `wip/` branch or nowhere
 * no new `TODO`/`FIXME` comment in the diff without `OPEN-QUESTIONS.md` being touched in the same diff — the marker right after a comment opener (`#`, `//`, `/*`, `<!--`, `--`, `;`); the bare word is a status in a task tracker, not a loose end
 
 An `AC-*` counts as belonging to a requirement only where the two IDs sit on the
@@ -293,15 +293,19 @@ That second list is short deliberately. Every unfalsifiable line added to it mak
 Do not leave the session half-done, and never leave `main` half-working:
 
 1. Say plainly what did not work and where you stopped.
-2. Unfinished code does not reach `main`. Commit it to `wip/<fr-id>-<slice>` —
-   `git switch -c` takes the working tree along; stage only the code, commit as
-   `feat: FR-014 order filter, unfinished` — or leave it uncommitted and say so.
+2. Unfinished code does not reach `main`. Commit it to `wip/<fr-id>-<slice>`
+   (a task with no requirement: `wip/<task-id>-<name>`) — `git switch -c` takes
+   the working tree along; stage only the code, commit as
+   `feat: FR-014 order filter, unfinished` (a task: `chore: TASK-007 backup,
+   unfinished`) — then `git switch main`: the rest happens there, and the next
+   session starts there. Or leave the code uncommitted and say so.
 3. If only the session ran out and nothing blocks the slice, set its status back
    to `TODO` and stop here: the `wip/` branch is the record, and the next
    `/slice-start` finds it.
 4. If something blocks it, then on `main`: the slice's `**Статус:**` set to
-   `BLOCKED` with the reason, an entry in `OPEN-QUESTIONS.md` that names the
-   slice with `**Статус:** OPEN`, and a Progress Log row with `BLOCKED`. Run
+   `BLOCKED` with the reason, an entry in `OPEN-QUESTIONS.md` whose
+   `**Блокує:**` names the slice, with `**Статус:** OPEN`, and a Progress Log
+   row with `BLOCKED`. Run
    `scripts/check-slice.py <SLICE-ID>` and show its output.
 5. After my OK, commit those docs alone, on `main`:
    `docs: FR-014 SLICE-005 blocked, OQ-007`.
@@ -309,10 +313,13 @@ Do not leave the session half-done, and never leave `main` half-working:
 A `BLOCKED` slice is unblocked by the answer, not by time. Writing the answer
 into its `OPEN-QUESTIONS.md` entry edits an existing entry, so it is mine or
 needs my yes. After that the slice is taken again — by `/slice-start` once
-every entry that names it is `ANSWERED`, or when I say the block is lifted —
-and goes straight to `IN PROGRESS`; its `wip/` branch is resumed as in
-*Branching*. It finishes like any other slice: the answer, the status and the
-code travel in its one commit.
+the entries whose `**Блокує:**` names it, at least one, are all `ANSWERED`, or
+when I say the block is lifted — and goes straight to `IN PROGRESS`; its `wip/`
+branch is resumed as in *Branching*. It finishes like any other slice: the
+answer, the status and the code travel in its one commit.
+
+A `BLOCKED` slice that no entry names has lost its reason; it has not been
+unblocked. `/slice-start` does not take it — it says so, and I decide.
 
 ---
 
@@ -336,7 +343,8 @@ The end-to-end key is the `FR-ID`. It survives all the way to the commit.
   to a test prefix it counts too, when it starts a new camelCase word in upper
   case or capitalised: `TestFR014Filter` (Go, pytest classes), `testFR014`
   (XCTest)
-* A `wip/` branch, if one is needed at all, carries the FR-ID: `wip/fr-014-order-filter`
+* A `wip/` branch, if one is needed at all, carries the FR-ID — `wip/fr-014-order-filter` —
+  or, for a task with no requirement, the TASK-ID: `wip/task-007-backup`
 
 If a change does not map to any FR — stop. Either the work is unnecessary, or there is a hole in the FRS.
 
@@ -535,8 +543,8 @@ On my deploy command:
    on failure — a rollback, halting a rollout — is a deploy too: it runs on my
    command.
 8. Second commit, after my OK: the task set to `DONE` — or to `BLOCKED`, with
-   an entry in `OPEN-QUESTIONS.md` that names the task, if the release was rolled back, halted or
-   abandoned — and a Progress Log row: `docs: TASK-0XX release 1.2 deployed`
+   an entry in `OPEN-QUESTIONS.md` whose `**Блокує:**` names the task, if the
+   release was rolled back, halted or abandoned — and a Progress Log row: `docs: TASK-0XX release 1.2 deployed`
    (or what happened instead: `rolled back`, `halted`) whose status column is
    the task's new status. Run `scripts/check-slice.py TASK-0XX` before this
    commit, not before the first one: until the deploy is over the task is not

@@ -24,6 +24,7 @@ scripts/check-ids.py      traceability by ID: nothing may reference a requiremen
 scripts/check-slice.py    the mechanical part of the Definition of Done
 scripts/integrity.sha256  pinned hashes for the rules and for every check listed above
 source/                   project code
+deploy/                   install / update / rollback scripts — built by a TASK before the first deploy
 tmpBin/                   development tooling (venv, local binaries, toolchains)
 .githooks/                commit-msg (traceability) + pre-commit (integrity + IDs)
 .github/workflows/        the same checks, server-side — --no-verify cannot reach them (optional: a project with no GitHub may delete it)
@@ -37,7 +38,7 @@ tmpBin/                   development tooling (venv, local binaries, toolchains)
 .env.example
 ```
 
-If something from this list is missing, **stop and tell me** — do not recreate it from memory. A silently rebuilt skeleton without `.githooks/` or `.gitattributes` looks fine and enforces nothing. Keep empty directories with a `.gitkeep`. The one item that may legitimately be absent is `.github/workflows/`, and only when the project has no GitHub; `scripts/check-template.py` is the authority on the rest.
+If something from this list is missing, **stop and tell me** — do not recreate it from memory. A silently rebuilt skeleton without `.githooks/` or `.gitattributes` looks fine and enforces nothing. Keep empty directories with a `.gitkeep`. Items that may legitimately be absent: `.github/workflows/`, only when the project has no GitHub; `deploy/` and `docs/DEPLOY.md`, only until the first release. `scripts/check-template.py` is the authority on the rest.
 
 ### The checks are not yours to edit
 
@@ -58,6 +59,7 @@ So: you do not edit those files, you do not edit the manifest, and you never run
 | `docs/FRS.md` | Requirements. Source of truth. `BR-*` (business level — implemented through an `FR-*`, never committed against), `FR-*`, `DR-*`, `NFR-*`, `IR-*` + Acceptance Criteria |
 | `docs/ARCHITECTURE.md` | Components, boundaries, stack, environments, deployment, migrations, rollback |
 | `docs/ADR/*.md` | Technical decisions and their reasons |
+| `docs/DEPLOY.md` | Runbook for the current release: version, what changes, migrations, the exact `deploy/` commands, the local verification result, post-deploy verification, rollback. Created at the first release, updated at every release |
 | `docs/BACKLOG.md` | Vertical slices, tech tasks, statuses, dependencies, order |
 | `docs/OPEN-QUESTIONS.md` | Unresolved questions |
 
@@ -78,13 +80,14 @@ Documentation is an agreement, not a working file. You may not edit it on your o
 * any change to `docs/FRS.md`;
 * any change to `docs/ARCHITECTURE.md`;
 * creating or changing `docs/ADR/*.md`;
+* creating or changing `docs/DEPLOY.md`;
 * adding, removing, or rewording slices and tasks in `docs/BACKLOG.md`;
 * deleting or editing existing entries in `OPEN-QUESTIONS.md`;
 * creating new files in `docs/`.
 
 Propose the change as a diff and wait for a yes.
 
-When you change `FRS.md` or `ARCHITECTURE.md`, bump the `Версія` field and add a row to that document's *Change Log*. Without both, the change is not finished.
+When you change `FRS.md` or `ARCHITECTURE.md`, bump the `Версія` field and add a row to that document's *Change Log*. `DEPLOY.md` does the same with its `Реліз` field, one Change Log row per release. Without both, the change is not finished.
 
 ---
 
@@ -136,6 +139,29 @@ The documentation update comes **before** the commit, not after it, and travels 
 When you need a requirement, search the FRS for its ID and read what is around it. Do not rely on a summary of the document you made earlier in the session, and do not carry requirement text between turns from memory — that is where invented `FR-0XX`s and near-miss Acceptance Criteria come from.
 
 If you cannot find an ID, or the AC is not written down: **say that**. An AC that you reconstructed is worse than a missing one, because it looks like agreement.
+
+### UI tests
+
+If the project has a user interface, unit tests are not enough for it. Anything
+the user sees is also covered by UI tests: end-to-end in a real browser (or the
+platform's equivalent) against the Acceptance Criteria, plus visual checks where
+the AC is about how something looks. They are part of the local verification
+command in `ARCHITECTURE.md`, section *Project Structure* — not a separate check,
+and never run against test or prod. The tools, browsers and viewports are
+decided there; if they are not, it is a question, not a tool you pick.
+
+* In step 4 the UI test is written against the AC before the UI code, like any
+  other test. Its file or function name carries the FR-ID or AC-ID, and it lives
+  under `source/` — `check-slice.py` does not look anywhere else.
+* Visual baselines (reference screenshots) are not yours to accept.
+  Regenerating them makes every visual test pass, exactly as `--fix` makes the
+  integrity check pass. When a baseline must change, show me the old and the new
+  image and wait for my yes; the new baseline travels in the same commit as the
+  change that caused it.
+* A failing or flaky UI test is not skipped, retried until green, or deleted.
+  Say which one and why.
+* UI tests, their tooling (browsers, drivers) and their baselines never reach
+  test or prod. `deploy/` ships only what the application needs at runtime.
 
 ### Asking questions
 
@@ -344,6 +370,42 @@ Irreversible actions (drop, truncate, force push, deleting files outside the wor
 * If you find a secret in the code or in history, stop and tell me. Do not "fix" it with a commit.
 
 `.claude/settings.json` denies reading `.env` at the tool level, but that is a second layer and it has had enforcement gaps. This rule is the primary one and it holds regardless of what the settings file allows.
+
+### Releases and deployment
+
+The scheme — environments, how deployment works, how rollback works — lives in
+`ARCHITECTURE.md`, section *Environments & Delivery*. The runbook for a concrete
+release lives in `docs/DEPLOY.md`. They do not repeat each other: `DEPLOY.md`
+refers to the scheme and adds only what is specific to this release. If a
+release needs the scheme itself to change, that is a change to
+`ARCHITECTURE.md` first.
+
+Installation, update and rollback are scripts in `deploy/`, not commands typed
+by hand:
+
+* `install` — sets up the environment and the application from scratch;
+* `update` — moves a running installation to the next release, migrations included;
+* `rollback` — returns it to the previous release.
+
+The scripts are work without an FR: a `TASK-*` in *Tech Tasks*, planned before
+the first deploy to test. Their language and form follow `ARCHITECTURE.md`;
+anything it does not decide is a question, not an implementation detail. Every
+script runs locally before it is ever pointed at test or prod — `rollback`
+included, because a rollback that has never run is not a plan. That task also
+proves the package `install` / `update` delivers contains no tests, no test
+tooling and no baselines — a check in the script, not a promise. Test and prod
+receive the same package.
+
+A release is a `TASK-*` of its own. On my deploy command:
+
+1. Update `docs/DEPLOY.md` for this release. Show it as a diff and wait for my yes.
+2. If the release needs a change to `deploy/`, that change is finished, checked
+   locally and committed first — never edited mid-deploy.
+3. Commit `DEPLOY.md` under the release task: `docs: TASK-0XX release 1.2 runbook`.
+4. Run the local verification command — UI tests included — on the build being
+   deployed, and show the real output. Red means no deploy.
+5. Only then deploy, by the rules above. For prod, the rollback section of
+   `DEPLOY.md` is the rollback plan that must be stated before launch.
 
 ---
 

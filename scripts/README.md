@@ -2,7 +2,7 @@
 
 | Файл | Призначення |
 |---|---|
-| `check-template.py` | enforcement-файли не змінені + структура на місці + хуки увімкнені |
+| `check-template.py` | enforcement-файли не змінені + структура на місці + `CLAUDE.md`/`AGENTS.md`/вказівники команд досі ведуть до правил + хуки увімкнені |
 | `check-ids.py` | traceability за ID: ніщо не посилається на вимогу, якої немає у FRS |
 | `check-slice.py` | механічна частина Definition of Done для одного зрізу |
 | `integrity.sha256` | пінені хеші всіх enforcement-файлів |

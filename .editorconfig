@@ -14,5 +14,9 @@ trim_trailing_whitespace = false
 [*.py]
 indent_size = 4
 
+# Узгоджено з .gitattributes: cmd.exe читає .bat/.cmd з LF неправильно.
+[*.{bat,cmd}]
+end_of_line = crlf
+
 [Makefile]
 indent_style = tab

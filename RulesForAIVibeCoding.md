@@ -14,6 +14,7 @@ On conflict with any other file (`AGENTS.md`, `CLAUDE.md`, `docs/*`, code commen
 
 ```
 RulesForAIVibeCoding.md   development cycle rules (this file, PRIORITY)
+README.md                 how to use the template: setup, the preparatory steps, Windows
 AGENTS.md                 thin pointer to these rules (read by Codex)
 CLAUDE.md                 imports AGENTS.md and this file (read by Claude Code)
 prompts/                  prompts for the preparatory chat sessions (steps 1-3)
@@ -46,6 +47,8 @@ If something from this list is missing, **stop and tell me** — do not recreate
 
 So: you do not edit those files, you do not edit the manifest, and you never run `--fix`. If a check is wrong, say which one and why, and propose the change. `--fix` belongs to me, in a terminal, in the same commit as the change it legitimises.
 
+The same holds for the files that carry these rules to an agent: `CLAUDE.md`, `AGENTS.md`, `prompts/` (including the canonical cycle commands in `prompts/dev/`), `.claude/commands/` and `.agents/skills/`. They are not pinned — a project may need to extend them — but a change to them needs my confirmation. `CLAUDE.md` without its import of this file loads no rules at all, and nothing else would notice.
+
 ### tmpBin/
 
 * The contents of `tmpBin/` are **never committed**. Check that `.gitignore` contains `tmpBin/*` and not `tmpBin/` — git cannot re-include a file inside an excluded directory, so with `tmpBin/` the `!tmpBin/.gitkeep` line silently does nothing.
@@ -59,7 +62,7 @@ So: you do not edit those files, you do not edit the manifest, and you never run
 | `docs/FRS.md` | Requirements. Source of truth. `BR-*` (business level — implemented through an `FR-*`, never committed against), `FR-*`, `DR-*`, `NFR-*`, `IR-*` + Acceptance Criteria |
 | `docs/ARCHITECTURE.md` | Components, boundaries, stack, environments, deployment, migrations, rollback |
 | `docs/ADR/*.md` | Technical decisions and their reasons |
-| `docs/DEPLOY.md` | Runbook for the current release: version, the commit the artifact is built from and the local verification that ran on that commit, what changes, the exact release commands, the checks to run after the release, what to do if it fails. Everything else in it depends on the platform, so its sections come from step 2 (`prompts/02-solution-setup.md`) as a skeleton. It holds the plan, not the outcome — the outcome goes to the Progress Log. Filled in at the first release, updated at every release |
+| `docs/DEPLOY.md` | Runbook for the current release: version, the commit that was verified and the local verification that ran on it (the artifact is built from the runbook commit on top of it, which changes only `docs/`), what changes, the exact release commands, the checks to run after the release, what to do if it fails. Everything else in it depends on the platform, so its sections come from step 2 (`prompts/02-solution-setup.md`) as a skeleton. It holds the plan, not the outcome — the outcome goes to the Progress Log. Filled in at the first release, updated at every release |
 | `docs/BACKLOG.md` | Vertical slices, tech tasks, statuses, dependencies, order |
 | `docs/OPEN-QUESTIONS.md` | Unresolved questions |
 
@@ -157,9 +160,15 @@ decided there; if they are not, it is a question, not a tool you pick.
   Regenerating them makes every visual test pass, exactly as `--fix` makes the
   integrity check pass. When a baseline must change, show me the old and the new
   image and wait for my yes; the new baseline travels in the same commit as the
-  change that caused it. In Claude Code the command that regenerates baselines
-  stops at a permission prompt (`.claude/hooks/bash-guard.py`). That prompt is
-  where I confirm, not a substitute for showing me the images first.
+  change that caused it. The command that regenerates baselines is the one
+  `ARCHITECTURE.md` names; use no other. In Claude Code its common spellings
+  stop at a permission prompt (`.claude/hooks/bash-guard.py`) — the well-known
+  flags only, not a project script that wraps them. That prompt is where I
+  confirm, not a substitute for showing me the images first.
+* A missing baseline is a failure, not a new baseline. Many runners write one
+  silently on the first run; the local verification command runs in the mode
+  that refuses to (`ARCHITECTURE.md` says how). If it does not, say so — a
+  baseline written by a run nobody looked at is one you accepted.
 * A failing or flaky UI test is not skipped, retried until green, or deleted.
   Say which one and why.
 * UI tests, their tooling (browsers, drivers) and their baselines never reach
@@ -247,7 +256,7 @@ A checklist you recite is a checklist that always passes. So it is split.
 Git Bash there is often no `python3` — use `python`; see the *Windows* section of
 `README.md`), and you paste its real output:
 
-* the slice exists in `BACKLOG.md`, its status is off `TODO`, the Progress Log has a dated row for it
+* the slice exists in `BACKLOG.md`, its `**Статус:**` field is `DONE` or `BLOCKED`, the Progress Log has a dated row for it with that same status
 * every requirement the slice claims exists in the FRS
 * every claimed requirement is traceable into `source/` — the test name carries the FR-ID or an AC-ID of it
 
@@ -447,7 +456,9 @@ A release is a `TASK-*` of its own, and it is the one task with exactly two
 commits: one before the deploy, one after it. The outcome of a deploy does not
 exist until the deploy has run, so a single commit would have to either claim
 it in advance or leave it out. The one-commit rule of the *Work cycle* does not
-apply to a release task; nothing else is exempt from it. On my deploy command:
+apply to a release task; nothing else is exempt from it. The cycle commands
+(`/slice-start`, `/slice-finish`) do not run a release task — this list does.
+On my deploy command:
 
 1. The release task already exists in *Tech Tasks* of `BACKLOG.md`. If it does
    not, propose it — that is a change to `BACKLOG.md` and needs my yes. Never
@@ -455,10 +466,10 @@ apply to a release task; nothing else is exempt from it. On my deploy command:
 2. A change to `deploy/` is not part of the release. It is a `TASK-*` of its
    own, finished, run locally and committed before the release starts — never
    edited mid-deploy.
-3. Run the local verification command — UI tests included — on the commit the
-   artifact will be built from, and show the real output. The artifact carries
-   no tests, so it is the commit that gets verified, not the artifact. Red
-   means no deploy and no runbook.
+3. Run the local verification command — UI tests included — on the current
+   commit, with a clean working tree, and show the real output. The artifact
+   carries no tests, so it is the commit that gets verified, not the artifact.
+   Red means no deploy and no runbook.
 4. Update `docs/DEPLOY.md` for this release: the hash of the commit verified in
    step 3 and the verification that ran on it, taken from the output you have
    just shown — never written ahead of it. Post-deploy checks go in as checks
@@ -467,7 +478,10 @@ apply to a release task; nothing else is exempt from it. On my deploy command:
    row — `docs: TASK-0XX release 1.2 runbook`. It touches only `docs/`; if
    anything outside `docs/` changed since step 3, the verification no longer
    covers it — go back to step 3.
-6. Only then deploy, by the rules above. For prod, the section of `DEPLOY.md`
+6. Only then deploy, by the rules above. The artifact is built from this
+   runbook commit, not by checking out the verified one: the two differ only
+   in `docs/`, and you show that — `git diff --stat <verified> HEAD -- .
+   ':!docs'` prints nothing. For prod, the section of `DEPLOY.md`
    on a failed release is the plan that must be stated before launch.
 7. Run the post-deploy checks from `DEPLOY.md` and show the real output. If the
    deploy or the checks fail, stop and tell me. Whatever `DEPLOY.md` says to do
@@ -476,9 +490,10 @@ apply to a release task; nothing else is exempt from it. On my deploy command:
 8. Second commit, after my OK: the task set to `DONE` — or to `BLOCKED`, with
    an entry in `OPEN-QUESTIONS.md`, if the release was rolled back, halted or
    abandoned — and a Progress Log row: `docs: TASK-0XX release 1.2 deployed`
-   (or what happened instead: `rolled back`, `halted`). Run
-   `scripts/check-slice.py TASK-0XX` before this commit, not before the first
-   one: until the deploy is over the task is not done.
+   (or what happened instead: `rolled back`, `halted`) whose status column is
+   the task's new status. Run `scripts/check-slice.py TASK-0XX` before this
+   commit, not before the first one: until the deploy is over the task is not
+   done.
 
 ---
 

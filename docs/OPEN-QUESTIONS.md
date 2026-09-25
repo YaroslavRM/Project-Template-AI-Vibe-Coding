@@ -9,7 +9,7 @@
 ```
 ## OQ-XXX — <коротке формулювання>
 **Відкрито:** YYYY-MM-DD
-**Джерело:** BA / Architecture / Slice SLICE-00X / Session
+**Джерело:** BA / Architecture / Planning / Slice SLICE-00X / Session
 **Блокує:** FR-012, SLICE-004 (або «не блокує»)
 **Питання:**
 **Варіанти / гіпотези:**

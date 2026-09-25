@@ -222,6 +222,16 @@ PROTECTED_READ = re.compile(
 )
 PROTECTED_REDIRECT = re.compile(r">>?\s*[^\s;&|]*(?:" + "|".join(re.escape(p) for p in PROTECTED) + ")")
 CP_HEAD = re.compile(r"^cp\b")
+# What stands in front of the command word without being one: shell keywords
+# of a loop or a condition, and the opening of a `$(...)` or a subshell. The
+# segment splitter cuts `for …; do h=$(grep x scripts/integrity.sha256 | …)`
+# into `do h=$(grep x scripts/integrity.sha256`, and that segment used to be
+# refused as a write to the manifest — the first command of an audit session.
+LEAD = re.compile(r"^(?:(?:do|then|else|elif|if|while|until|!)\s+|\w+=\$\(|\$\(|\(|`)+")
+# An input redirection reads the file: `done < scripts/integrity.sha256` is a
+# loop reading the manifest. Dropped before the name is looked for, so the
+# write that may stand next to it (`tee <pinned> < x`) is still seen.
+INPUT_REDIRECT = re.compile(r"(?<![<\d])<(?![<(])\s*[^\s;&|<>]+")
 
 
 def _names_protected(token: str) -> bool:
@@ -230,7 +240,7 @@ def _names_protected(token: str) -> bool:
 
 def manifest_violation(segs: list[str]) -> str | None:
     for seg in segs:
-        plain = unquoted(seg)
+        plain = INPUT_REDIRECT.sub("", LEAD.sub("", unquoted(seg))).strip()
         hit = next((p for p in PROTECTED if p in plain), None)
         if hit is None:
             continue
@@ -501,12 +511,14 @@ TEXT_RULES: list[tuple[re.Pattern[str], str]] = [
         # The first lookahead lets the bare read through: `git config
         # core.hooksPath` with no value prints the setting, and it used to be
         # blocked as if it set one — while check-template.py's own advice is to
-        # look at it. Only scope flags may precede the key for that; `--unset
-        # core.hooksPath` has no value either, and it is a write.
+        # look at it. Only scope flags and the `get` subcommand (git 2.46+) may
+        # precede the key for that, and only an output redirection may follow
+        # it (`2>/dev/null` is not a value); `--unset core.hooksPath` has no
+        # value either, and it is a write.
         re.compile(
             GIT_GLOBALS + r"config\s+"
-            r"(?!(?:--(?:local|global|system|worktree|show-origin|show-scope)\s+)*"
-            r"core\.hookspath\s*(?:[;&|)]|$))"
+            r"(?!(?:(?:--(?:local|global|system|worktree|show-origin|show-scope)|get)\s+)*"
+            r"core\.hookspath(?:\s+\d?>>?&?\s*[^\s;&|]+)*\s*(?:[;&|)]|$))"
             r"(?:(?!--get\b|--get-all\b|--get-regexp\b|--list\b|-l\b)[^\s;&|]+\s+)*?"
             r"core\.hookspath\b(?!\s+[\"']?\.githooks/?(?:[\s\"';&|)]|$))",
             re.IGNORECASE,
@@ -532,18 +544,35 @@ TEXT_RULES: list[tuple[re.Pattern[str], str]] = [
 # exactly where that yes is given. Read on the `flags` reading, so a commit
 # message that mentions the flag is not a regeneration.
 #
-# Long flags only, and that limit is stated rather than hidden: `-u` is the
-# short form in Jest and Vitest, and it is also `git add -u` and `sort -u`.
+# Two kinds of spelling. Long flags that mean nothing else anywhere, matched
+# on the whole command. And the short or generic forms — `-u`, `--update` —
+# which are also `git add -u` and `sort -u`, so they count only in a segment
+# that runs one of the runners they belong to (Playwright, Jest, Vitest).
+#
+# The limit, stated rather than hidden: a project script that wraps these
+# (`npm run test:update`) is invisible here. That is why the rules make
+# ARCHITECTURE.md name the one regeneration command, and make the local
+# verification refuse to write a missing baseline on its own.
+ASK_MESSAGE = (
+    "this regenerates visual baselines, which makes every visual test pass. "
+    "Rules, section UI tests: the owner has seen the old and the new images "
+    "and said yes before this runs."
+)
 ASK_RULES: list[tuple[re.Pattern[str], str]] = [
     (
         re.compile(
             r"(?<![\w-])--(?:update-?snapshots?|updateSnapshots?|snapshot-update"
-            r"|update-baselines?)(?![\w-])",
+            r"|update-baselines?|force-regen)(?![\w-])"
+            r"|\bbackstop\s+approve\b",
             re.IGNORECASE,
         ),
-        "this regenerates visual baselines, which makes every visual test pass. "
-        "Rules, section UI tests: the owner has seen the old and the new images "
-        "and said yes before this runs.",
+        ASK_MESSAGE,
+    ),
+]
+ASK_PER_SEGMENT: list[tuple[re.Pattern[str], str]] = [
+    (
+        re.compile(r"\b(?:playwright|jest|vitest)\b[\s\S]*?\s(?:-u|--update)(?![\w-])"),
+        ASK_MESSAGE,
     ),
 ]
 
@@ -629,6 +658,11 @@ def main() -> int:
     if reason is None:
         flags = flags_only(command)
         ask = next((m for p, m in ASK_RULES if p.search(flags)), None)
+        if ask is None:
+            ask = next(
+                (m for seg in segments(flags) for p, m in ASK_PER_SEGMENT if p.search(seg)),
+                None,
+            )
         if ask is not None:
             # Exit 0 with a decision on stdout: Claude Code shows the owner a
             # permission prompt instead of refusing the call outright.

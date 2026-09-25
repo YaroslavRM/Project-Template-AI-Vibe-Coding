@@ -89,6 +89,7 @@ PROTECTED = [
 # the files can tell, so requiring them here would fail every new project and
 # checking "only after the first release" would be a guess.
 REQUIRED = [
+    "README.md",
     "AGENTS.md",
     "CLAUDE.md",
     ".gitignore",
@@ -293,6 +294,35 @@ else:
 for rel in REQUIRED:
     if not (ROOT / rel).exists():
         errors.append(f"missing: {rel}")
+
+# --- 2b. The files that carry the rules to an agent still point at them ----
+# Not pinned: a project may extend CLAUDE.md or AGENTS.md. But each of them
+# is the only road from an agent to the rules or to a canonical command, and
+# a CLAUDE.md that lost its `@RulesForAIVibeCoding.md` line loads no rules at
+# all — every other check here would keep saying OK.
+POINTERS = {
+    "CLAUDE.md": ["@AGENTS.md", "@RulesForAIVibeCoding.md"],
+    "AGENTS.md": ["RulesForAIVibeCoding.md"],
+    ".claude/commands/slice-start.md": ["prompts/dev/slice-start.md"],
+    ".claude/commands/slice-finish.md": ["prompts/dev/slice-finish.md"],
+    ".agents/skills/slice-start/SKILL.md": ["prompts/dev/slice-start.md"],
+    ".agents/skills/slice-finish/SKILL.md": ["prompts/dev/slice-finish.md"],
+}
+for rel, needles in POINTERS.items():
+    path = ROOT / rel
+    if not path.is_file():
+        continue  # already reported as missing above
+    text = path.read_text(encoding="utf-8", errors="replace")
+    lines = {ln.strip() for ln in text.splitlines()}
+    for needle in needles:
+        # An import must be a line of its own to be an import at all.
+        present = needle in lines if needle.startswith("@") else needle in text
+        if not present:
+            errors.append(
+                f"{rel} no longer references {needle} — an agent that starts from "
+                f"it never reaches the rules or the canonical command. Restore it "
+                f"from git.\n  {AGENT_LINE}"
+            )
 
 # --- 3. tmpBin/ is excluded the way git actually understands ----------------
 

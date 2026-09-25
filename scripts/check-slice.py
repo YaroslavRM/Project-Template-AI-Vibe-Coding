@@ -64,6 +64,11 @@ MAX_RANGE = 99  # a wider span is a typo, not a range
 # happens to mention several IDs does not.
 MAPPING_LINE = re.compile(r"^\s*(?:\||#{1,6}\s)")
 STATUS = re.compile(r"\b(TODO|IN PROGRESS|DONE|BLOCKED)\b")
+# The status is read from the `**Статус:**` field, never from the block as a
+# whole. The heading is part of the block, and a slice called
+# `SLICE-001 — Mark order DONE` used to report DONE while its field had not
+# moved at all: a false yes. `**Status:**` is accepted for an English backlog.
+STATUS_FIELD = re.compile(r"^\s*[-*]?\s*\*{0,2}\s*(?:Статус|Status)\s*:", re.IGNORECASE)
 DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 
 # Only the fallback for a working copy with no usable git — the real filter is
@@ -269,25 +274,37 @@ def main() -> int:
 
     block_text = "\n".join(block)
 
-    # Status moved off TODO.
-    statuses = STATUS.findall(block_text)
+    # Status moved to DONE or BLOCKED, read from the status field only.
+    field = next((ln for ln in block[1:] if STATUS_FIELD.match(ln)), None)
+    statuses = STATUS.findall(field) if field else []
+    status = statuses[0] if statuses else None
     check(
-        bool(statuses) and statuses[0] in {"DONE", "BLOCKED"},
-        f"{slice_id} status is DONE or BLOCKED (found: {statuses[0] if statuses else 'none'})",
+        status in {"DONE", "BLOCKED"},
+        f"{slice_id} **Статус:** is DONE or BLOCKED (found: "
+        + (status or ("no status in the field" if field else "no **Статус:** field"))
+        + ")",
     )
 
-    # Progress Log row: a table row carrying both a date and the ID, inside
-    # the Progress Log section itself — not any dated row anywhere in the
-    # document that happens to mention the ID (a Release Plan row, say).
+    # Progress Log row: a table row carrying the date, the ID and the status
+    # the slice now has, inside the Progress Log section itself — not any
+    # dated row anywhere in the document that happens to mention the ID (a
+    # Release Plan row, say). The status is required because a release task
+    # has two rows: without it the IN PROGRESS row of the first commit
+    # satisfied the check for the second, whose row could be missing.
     progress_log = section(backlog, "Progress Log")
     if not progress_log:
         check(False, "docs/BACKLOG.md has no Progress Log section")
     else:
+        def cells(line: str) -> list[str]:
+            return [c.strip() for c in line.strip().strip("|").split("|")]
+
         logged = any(
-            slice_id in line and DATE.search(line) and line.strip().startswith("|")
+            line.strip().startswith("|")
+            and re.search(rf"\b{re.escape(slice_id)}\b", line) and DATE.search(line)
+            and (status is None or status in cells(line))
             for line in progress_log
         )
-        check(logged, f"Progress Log has a dated row for {slice_id}")
+        check(logged, f"Progress Log has a dated row for {slice_id} with status {status or '?'}")
 
     # Every requirement the slice claims is traceable into source/.
     claimed = sorted(set(REQ_ID.findall(block_text)))

@@ -41,6 +41,7 @@ ROOT = Path(__file__).resolve().parent.parent
 FRS = ROOT / "docs/FRS.md"
 BACKLOG = ROOT / "docs/BACKLOG.md"
 ARCH = ROOT / "docs/ARCHITECTURE.md"
+DEPLOY = ROOT / "docs/DEPLOY.md"
 ADR_DIR = ROOT / "docs/ADR"
 SOURCE = ROOT / "source"
 
@@ -163,6 +164,13 @@ if BACKLOG.is_file():
 if ARCH.is_file():
     arch_text = read(ARCH)
     report("requirement IDs", set(REQ_ID.findall(arch_text)) - frs_reqs, "docs/ARCHITECTURE.md")
+
+# The release runbook names what a release changes, and it is written by the
+# agent at release time — the same place an invented ID gets typed in.
+if DEPLOY.is_file():
+    deploy_text = read(DEPLOY)
+    report("requirement IDs", set(REQ_ID.findall(deploy_text)) - frs_reqs, "docs/DEPLOY.md")
+    report("acceptance criteria", set(AC_ID.findall(deploy_text)) - frs_acs, "docs/DEPLOY.md")
 
 # In source, the same ID is usually spelled FR_014 or FR014: hyphens are not
 # valid in identifiers, and the rules ask for the ID in the test name.

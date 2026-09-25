@@ -21,6 +21,12 @@ RulesForAIVibeCoding.md text eol=lf
 .github/workflows/*      text eol=lf
 scripts/integrity.sha256 text eol=lf
 
+# Виняток: batch-файли Windows. cmd.exe читає .bat/.cmd з LF неправильно —
+# мітки й goto/call :label ламаються залежно від розміру файлу. Стосується
+# інструментів релізу в deploy/, якщо ARCHITECTURE.md обере для них cmd.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
 # Бінарне — без нормалізації
 *.png binary
 *.jpg binary

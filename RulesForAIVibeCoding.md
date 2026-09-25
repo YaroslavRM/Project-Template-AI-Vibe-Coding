@@ -157,7 +157,9 @@ decided there; if they are not, it is a question, not a tool you pick.
   Regenerating them makes every visual test pass, exactly as `--fix` makes the
   integrity check pass. When a baseline must change, show me the old and the new
   image and wait for my yes; the new baseline travels in the same commit as the
-  change that caused it.
+  change that caused it. In Claude Code the command that regenerates baselines
+  stops at a permission prompt (`.claude/hooks/bash-guard.py`). That prompt is
+  where I confirm, not a substitute for showing me the images first.
 * A failing or flaky UI test is not skipped, retried until green, or deleted.
   Say which one and why.
 * UI tests, their tooling (browsers, drivers) and their baselines never reach
@@ -200,7 +202,7 @@ linter, test-runner, editor configs — is not in scope.
 
 An ID is an index, not a question. A bare `FR-014` in front of me means I open `FRS.md` before I can even tell what you are asking — and that lookup costs more than the question saved by leaving the words out.
 
-So every ID you put in a message to me — a clarifying question, an options list, a diff summary — carries a short gloss in parentheses, taken from what the FRS actually says:
+So every ID you put in a message to me — a clarifying question, an options list, a diff summary — carries a short gloss in parentheses, taken from the document the ID lives in: the FRS for a requirement or an AC, `BACKLOG.md` for a slice or a task, the ADR itself for a decision:
 
 ```
 FR-014 (фільтр замовлень за статусом): AC каже «статус зі списку», а

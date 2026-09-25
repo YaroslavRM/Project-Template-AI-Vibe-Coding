@@ -497,8 +497,16 @@ TEXT_RULES: list[tuple[re.Pattern[str], str]] = [
     (
         # The lookahead ends `.githooks` at whitespace, a quote, a separator
         # or the end of the text: `\b` let `.githooks/../evil` through.
+        #
+        # The first lookahead lets the bare read through: `git config
+        # core.hooksPath` with no value prints the setting, and it used to be
+        # blocked as if it set one — while check-template.py's own advice is to
+        # look at it. Only scope flags may precede the key for that; `--unset
+        # core.hooksPath` has no value either, and it is a write.
         re.compile(
             GIT_GLOBALS + r"config\s+"
+            r"(?!(?:--(?:local|global|system|worktree|show-origin|show-scope)\s+)*"
+            r"core\.hookspath\s*(?:[;&|)]|$))"
             r"(?:(?!--get\b|--get-all\b|--get-regexp\b|--list\b|-l\b)[^\s;&|]+\s+)*?"
             r"core\.hookspath\b(?!\s+[\"']?\.githooks/?(?:[\s\"';&|)]|$))",
             re.IGNORECASE,
@@ -514,6 +522,28 @@ TEXT_RULES: list[tuple[re.Pattern[str], str]] = [
         re.compile(r"--i-know-what-im-doing"),
         "that flag exists only to confirm --fix. Renaming or copying the script "
         "does not change whose decision it is: the owner's, in a terminal.",
+    ),
+]
+
+# Not blocked but handed to the owner as a permission prompt. Regenerating
+# visual baselines makes every visual test pass, the way --fix makes the
+# integrity check pass — but unlike --fix it is legitimate after the owner has
+# seen the old and new images (rules, section UI tests), and the prompt is
+# exactly where that yes is given. Read on the `flags` reading, so a commit
+# message that mentions the flag is not a regeneration.
+#
+# Long flags only, and that limit is stated rather than hidden: `-u` is the
+# short form in Jest and Vitest, and it is also `git add -u` and `sort -u`.
+ASK_RULES: list[tuple[re.Pattern[str], str]] = [
+    (
+        re.compile(
+            r"(?<![\w-])--(?:update-?snapshots?|updateSnapshots?|snapshot-update"
+            r"|update-baselines?)(?![\w-])",
+            re.IGNORECASE,
+        ),
+        "this regenerates visual baselines, which makes every visual test pass. "
+        "Rules, section UI tests: the owner has seen the old and the new images "
+        "and said yes before this runs.",
     ),
 ]
 
@@ -597,6 +627,16 @@ def main() -> int:
                 break
 
     if reason is None:
+        flags = flags_only(command)
+        ask = next((m for p, m in ASK_RULES if p.search(flags)), None)
+        if ask is not None:
+            # Exit 0 with a decision on stdout: Claude Code shows the owner a
+            # permission prompt instead of refusing the call outright.
+            print(json.dumps({"hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "ask",
+                "permissionDecisionReason": f".claude/hooks/bash-guard.py: {ask}",
+            }}))
         return 0
 
     print(f"Blocked by .claude/hooks/bash-guard.py: {reason}", file=sys.stderr)

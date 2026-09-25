@@ -82,6 +82,12 @@ PROTECTED = [
 # Mirrors the structure listed in RulesForAIVibeCoding.md, section
 # "Project structure". If you add a file there, add it here — a skeleton
 # that is silently incomplete enforces nothing.
+#
+# Except what the rules allow to be absent for a while: .github/workflows/
+# (no GitHub), docs/DEPLOY.md (until step 2 writes its skeleton) and deploy/
+# (until the first release). Whether that moment has come is not something
+# the files can tell, so requiring them here would fail every new project and
+# checking "only after the first release" would be a guess.
 REQUIRED = [
     "AGENTS.md",
     "CLAUDE.md",

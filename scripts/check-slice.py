@@ -404,7 +404,10 @@ def main() -> int:
         # The previous version concatenated all of source/ into a single string,
         # which read hundreds of megabytes of vendored dependencies for nothing
         # and could match an ID across the seam between two unrelated files.
-        wanted = {req: [req, *frs_acs_for.get(req, [])] for req in claimed}
+        manual = _manual_reqs(block, slice_id, claimed)
+        wanted = {
+            req: [req, *frs_acs_for.get(req, [])] for req in claimed if req not in manual
+        }
         found: set[str] = set()
         tests = [p for p in source_files() if _is_test(p)]
         if not tests:
@@ -422,7 +425,7 @@ def main() -> int:
             for req, idents in wanted.items():
                 if req not in found and any(_mentions(names, i) for i in idents):
                     found.add(req)
-        untested = [req for req in claimed if req not in found]
+        untested = [req for req in claimed if req not in found and req not in manual]
         check(
             not untested,
             "every claimed requirement appears in source/ or deploy/ (test names carry the ID): "
@@ -631,6 +634,64 @@ def _open_entry_names(text: str, ident: str) -> bool:
         entry_open(e) and own.search(entry_field(e, BLOCKS_FIELD))
         for e in oq_entries(text)
     )
+
+
+# A task whose requirement no test can check — a backup switched on in the
+# hosting panel — was told to close BLOCKED and ask. Once the owner answered
+# "verify it by hand", the task could never be DONE: no test would ever carry
+# its ID, and the only way out was a test written for the checkbox. The field
+# names the requirement and the entry that allowed it.
+MANUAL_FIELD = re.compile(
+    r"^\s*[-*]?\s*\*{0,2}\s*(?:Перевірка вручну|Manual verification)\s*\*{0,2}\s*:",
+    re.IGNORECASE,
+)
+OQ_ID = re.compile(r"\bOQ-\d{3}\b")
+
+
+def _manual_reqs(block: list[str], work_id: str, claimed: list[str]) -> set[str]:
+    """Claimed requirements a task may close without a test, or an empty set.
+
+    Only a task, and only on an entry that is ANSWERED now, names the task in
+    **Блокує:**, and was already in HEAD naming it — the question the task was
+    blocked on. An entry written in the same diff proves nothing: whoever
+    wants the exemption could write it.
+    """
+    field = next((ln for ln in block[1:] if MANUAL_FIELD.match(ln)), None)
+    if field is None:
+        return set()
+    if not work_id.startswith("TASK-"):
+        check(False, f"{work_id} has **Перевірка вручну:** — only a task may; "
+                     f"a slice's requirements are tested")
+        return set()
+    reqs = set(REQ_ID.findall(field)) & set(claimed)
+    oqs = sorted(set(OQ_ID.findall(field)))
+    head = git_out("show", "HEAD:docs/OPEN-QUESTIONS.md") or ""
+    ok = bool(reqs) and bool(oqs) and all(
+        _entry_blocks(read(OQ), oq, work_id, "ANSWERED")
+        and _entry_blocks(head, oq, work_id, None)
+        for oq in oqs
+    )
+    check(
+        ok,
+        f"**Перевірка вручну:** {', '.join(sorted(reqs)) or 'names no claimed requirement'}"
+        f" — {', '.join(oqs) or 'no OQ-ID'}: ANSWERED, already committed, "
+        f"**Блокує:** names {work_id}",
+    )
+    return reqs if ok else set()
+
+
+def _entry_blocks(text: str, oq: str, work_id: str, status: str | None) -> bool:
+    """Entry `oq` names `work_id` in **Блокує:** (and has `status`, if given)."""
+    for entry in oq_entries(text):
+        if not re.search(rf"\b{re.escape(oq)}\b", entry[0]):
+            continue
+        if not re.search(rf"\b{re.escape(work_id)}\b", entry_field(entry, BLOCKS_FIELD)):
+            return False
+        if status is None:
+            return True
+        found = OQ_STATUS.search(entry_field(entry, STATUS_FIELD))
+        return bool(found) and found.group(1) == status
+    return False
 
 
 def _acs_for(text: str, req: str) -> list[str]:

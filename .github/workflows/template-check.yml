@@ -28,7 +28,7 @@ jobs:
       # рядок, і воно видно в diff.
       - name: Manifest pin
         run: |
-          expected="8ab4bce96f215a5a5529e71012a7e3cb262e4b4f09c795b5ba261406df0fd3ec"
+          expected="21383b7e003c4eb346cc26774427c1b4b5d077f6bd32a51ed5566f7274f18c4e"
           actual=$(sha256sum scripts/integrity.sha256 | cut -d' ' -f1)
           if [ "$expected" != "$actual" ]; then
             echo "scripts/integrity.sha256 змінився, а пін у цьому workflow — ні."
@@ -92,7 +92,10 @@ jobs:
           fi
           echo "перевіряю: $range"
           fail=0
-          while IFS= read -r msg; do
+          # Перший рядок повідомлення, як у хуку, а не %s: %s — це весь перший
+          # абзац, склеєний в один рядок, і ID у другому рядку проходив би.
+          while IFS= read -r -d '' body; do
+            msg=$(printf '%s\n' "$body" | sed -e '/^#/d' -e '/^$/d' | head -1)
             [ -z "$msg" ] && continue
             case "$msg" in
               'Revert "'*) ;;
@@ -104,7 +107,7 @@ jobs:
             if ! printf '%s' "$msg" | grep -qE '(^|[^A-Za-z0-9-])(FR|DR|NFR|IR|TASK|SLICE)-[0-9]{3}([^0-9-]|$)'; then
               echo "немає ID вимоги або задачі в темі коміту: $msg"; fail=1
             fi
-          done < <(git log --no-merges --min-parents=1 --format=%s $range)
+          done < <(git log -z --no-merges --min-parents=1 --format=%B $range)
           if [ "$fail" != 0 ]; then
             echo "Клієнтський commit-msg це ловить; --no-verify його зняв. CI не приймає коміт без ID."
             echo "Тему вже запушеного коміту не виправити без переписування історії й force-push —"

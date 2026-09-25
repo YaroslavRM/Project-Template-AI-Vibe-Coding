@@ -260,6 +260,38 @@ if OQ.is_file():
             "was renamed. Editing an existing entry is the owner's — tell them."
         )
 
+    # --- ...and ones that block a requirement but no planned work ----------
+    # Steps 1-2 may name only requirements in **Блокує:**. Whether such a
+    # question blocks the slice that later claims the requirement is a
+    # decision — a `[CONFIRMED, TBD]` parameter may not matter to it at all —
+    # and it belongs to step 3 and the owner, written into the entry. Left as
+    # a bare FR-ID, /slice-start looked for the slice's own ID, found none,
+    # and the slice was built past an open question.
+    backlog_text = read(BACKLOG) if BACKLOG.is_file() else ""
+    claimed_by: dict[str, set[str]] = {}
+    for work in planned:
+        block = cs.slice_block(backlog_text, work)
+        field = next((ln for ln in block[1:] if cs.REQS_FIELD.match(ln)), "")
+        for req in cs.REQ_ID.findall(field):
+            claimed_by.setdefault(req, set()).add(work)
+    for entry in cs.oq_entries(read(OQ)):
+        field = cs.entry_field(entry, cs.BLOCKS_FIELD)
+        if not cs.entry_open(entry) or WORK_ID.search(field):
+            continue
+        reqs = sorted(r for r in set(cs.REQ_ID.findall(field)) if r in claimed_by)
+        if not reqs:
+            continue
+        oq = cs.OQ_ID.search(entry[0]).group(0)  # an entry is an `## OQ-NNN` heading
+        works = sorted({w for r in reqs for w in claimed_by[r]})
+        errors.append(
+            f"docs/OPEN-QUESTIONS.md: open {oq} blocks {', '.join(reqs)}, which "
+            f"{', '.join(works)} claims, but names no slice or task.\n"
+            f"  Whether it blocks that work is the owner's decision, not yours: its "
+            f"**Блокує:** must name the slice or task it blocks, or say «не блокує». "
+            f"Editing an existing entry is the owner's — tell them; in an entry you "
+            f"are adding now, ask."
+        )
+
 # --- ADR files referenced but absent ---------------------------------------
 
 referenced_adrs: set[str] = set()

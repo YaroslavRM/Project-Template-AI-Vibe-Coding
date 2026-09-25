@@ -87,6 +87,20 @@ REQS_FIELD = re.compile(
     r"^\s*[-*]?\s*\*{0,2}\s*(?:Вимоги|Requirements)\s*\*{0,2}\s*:", re.IGNORECASE
 )
 DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
+# A TODO/FIXME is a loose end only when it is a comment. The bare word used to
+# count, and in a task tracker — `class Status: TODO = "TODO"`, a status the
+# FRS itself defines — every slice failed the Definition of Done and could
+# pass only by inventing an entry in docs/OPEN-QUESTIONS.md. So the marker has
+# to follow a comment opener: # // /* <!-- -- ; or a `*` / `%` starting a line.
+TODO_MARKER = re.compile(
+    r"(?:#|//|/\*|<!--|--|;|^\s*\*|^\s*%)\s*(?:TODO|FIXME)\b", re.MULTILINE
+)
+# Open questions: an entry is a `## OQ-NNN` heading and the lines under it.
+# The format sample at the top of the file sits in a code fence and is not an
+# entry — it once carried a real-looking `SLICE-004`, which then "explained"
+# why SLICE-004 was blocked with no entry at all.
+OQ_ENTRY = re.compile(r"^\s*##\s+OQ-\d{3}\b")
+OQ_STATUS = re.compile(r"\b(OPEN|ANSWERED|DEFERRED)\b")
 
 # Only the fallback for a working copy with no usable git — the real filter is
 # .gitignore, read through `git ls-files` in source_files(). Kept because a
@@ -105,9 +119,12 @@ SKIP_DIRS = {
 # of Done, which is exactly what the rules say does not count. Deliberately
 # generous across ecosystems; the failure message names these patterns so a
 # project with another layout knows why it failed.
+# `.cy.` is Cypress (`cypress/e2e/login.cy.ts`) and `.e2e.` the Angular/Nest
+# spelling; the browser tests the rules demand for a UI are written in both,
+# and neither matched before, so a Cypress suite counted as no tests at all.
 TEST_NAME = re.compile(
     r"(?:^test[_.-]|[_.-]tests?\.|^tests?\.[a-z]+$"
-    r"|[_.-]spec\.|^spec\.[a-z]+$|\.feature$)",
+    r"|[_.-]spec\.|^spec\.[a-z]+$|\.feature$|\.cy\.|[_.-]e2e\.)",
     re.IGNORECASE,
 )
 # Java, C#, Kotlin, Swift and PHP name a test class OrderTest, OrderTests or
@@ -116,7 +133,12 @@ TEST_NAME = re.compile(
 # `latest.py` or `fastest.ts` counted as a test file, and any `def fr_005_x()`
 # in it closed FR-005 without a single test.
 CAMEL_TEST_NAME = re.compile(r"[a-z0-9](?:Tests?|Spec)\.[A-Za-z]+$")
-TEST_DIRS = {"test", "tests", "spec", "specs", "__tests__", "testing"}
+# Compared lowercased. `integration_test` is Flutter's, `androidtest` is
+# Android's `src/androidTest/`.
+TEST_DIRS = {
+    "test", "tests", "spec", "specs", "__tests__", "testing",
+    "e2e", "integration_test", "androidtest",
+}
 # A line that gives a test its name. Given/When/Then are step text, not names,
 # so they are not here: an ID in a step is a comment by another spelling.
 MODIFIERS = (
@@ -134,15 +156,23 @@ TEST_DECL = re.compile(
     # At least one modifier is required, so an ordinary call is not a
     # declaration.
     rf"|(?:{MODIFIERS}\s+)+[\w<>\[\],.\s]+?\s+[`\w]+\s*\("
-    # Jest and friends: it.only(, test.each(, describe.skip(
-    r"|(?:it|test|describe|context)(?:\.\w+)*\s*\("
+    # Jest and friends: it.only(, test.each(, describe.skip(; Dart's group(
+    r"|(?:it|test|describe|context|group)(?:\.\w+)*\s*\("
     r")",
     re.IGNORECASE,
 )
+# A language missing here is not merely unchecked: every test written in it is
+# invisible, and the Definition of Done stays red with "no test files found".
+# `.dart` was missing although mobile is a platform the template supports, and
+# so were the ES-module spellings `.mjs` / `.mts` and C / C++ / Objective-C.
+# check-ids.py imports this set, so both scripts read the same files.
 TEXT_SUFFIXES = {
-    ".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".rb", ".php", ".java",
-    ".kt", ".cs", ".swift", ".sql", ".sh", ".md", ".txt", ".yml", ".yaml",
-    ".toml", ".json", ".html", ".css", ".vue", ".svelte", ".feature",
+    ".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts",
+    ".go", ".rs", ".rb", ".php", ".java", ".kt", ".kts", ".groovy", ".scala",
+    ".cs", ".fs", ".swift", ".m", ".mm", ".c", ".cc", ".cpp", ".h", ".hpp",
+    ".dart", ".ex", ".exs", ".lua", ".sql", ".sh", ".ps1",
+    ".md", ".txt", ".yml", ".yaml", ".toml", ".json", ".html", ".css",
+    ".vue", ".svelte", ".feature",
 }
 # A test is code (or a Gherkin feature). TEXT_SUFFIXES is the right width for
 # the TODO/FIXME scan, but it let a `tests/PLAN.md` line reading
@@ -348,11 +378,15 @@ def main() -> int:
     # A BLOCKED slice did not finish, so its code is on a wip/ branch or
     # nowhere, and demanding its tests on main made BLOCKED a status the
     # Definition of Done allowed and could never pass. What a BLOCKED slice
-    # owes instead is the reason, where the next session will look for it.
+    # owes instead is the reason, where the next session will look for it —
+    # an entry that is still open. An answered one is a reason to unblock the
+    # slice, not to keep it blocked, and any mention anywhere in the file
+    # (an old planning entry, the format sample) proved nothing.
     if status == "BLOCKED":
         check(
-            bool(re.search(rf"\b{re.escape(slice_id)}\b", read(OQ))),
-            f"docs/OPEN-QUESTIONS.md has an entry naming {slice_id} (why it is blocked)",
+            _open_entry_names(read(OQ), slice_id),
+            f"docs/OPEN-QUESTIONS.md has an open entry (**Статус:** OPEN or "
+            f"DEFERRED) naming {slice_id} — why it is blocked",
         )
     elif claimed:
         # The rules require the test name to carry the FR-ID or an AC-ID of it.
@@ -369,8 +403,9 @@ def main() -> int:
         if not tests:
             print(
                 "WARN:  no test files found under source/ or deploy/. Looked for "
-                "names like test_*, *_test.*, *.spec.*, *Test.*, *.feature, and "
-                "anything under test/ tests/ spec/ __tests__/."
+                "names like test_*, *_test.*, *.spec.*, *.cy.*, *Test.*, "
+                "*.feature, and anything under test/ tests/ spec/ __tests__/ "
+                "e2e/ integration_test/."
             )
         for path in tests:
             if len(found) == len(wanted):
@@ -409,7 +444,7 @@ def main() -> int:
         added_markers = [
             ln for ln in diff.splitlines()
             if ln.startswith("+") and not ln.startswith("+++")
-            and re.search(r"\b(TODO|FIXME)\b", ln)
+            and TODO_MARKER.search(ln[1:])
         ]
 
     untracked = git_out(
@@ -420,7 +455,7 @@ def main() -> int:
         rel for rel in untracked_paths
         if rel != "docs/BACKLOG.md"
         and (ROOT / rel).suffix.lower() in TEXT_SUFFIXES
-        and re.search(r"\b(TODO|FIXME)\b", read(ROOT / rel))
+        and TODO_MARKER.search(read(ROOT / rel))
     ]
 
     if added_markers or new_marker_files:
@@ -430,13 +465,13 @@ def main() -> int:
             or "docs/OPEN-QUESTIONS.md" in untracked_paths
         )
         total = len(added_markers) + len(new_marker_files)
-        check(touched_oq, f"{total} new TODO/FIXME — docs/OPEN-QUESTIONS.md updated")
+        check(touched_oq, f"{total} new TODO/FIXME comment(s) — docs/OPEN-QUESTIONS.md updated")
         for ln in added_markers[:5]:
             print(f"       {ln.strip()[:100]}")
         for rel in new_marker_files[:5]:
             print(f"       {rel} (new file)")
     elif diff is not None:
-        check(True, "no new TODO/FIXME in the diff")
+        check(True, "no new TODO/FIXME comment in the diff")
 
     print()
     for ok, label in results:
@@ -514,11 +549,66 @@ def _mentions(text: str, ident: str) -> bool:
     inside prose can no longer be mistaken for a test name.
     """
     prefix, number = ident.split("-")
-    # Not \b: in test_FR_014_filter the underscore is itself a word character,
-    # so \b never fires next to it.
-    return re.search(
-        rf"(?<![A-Za-z0-9]){prefix}[-_]?{number}(?![0-9])", text, re.IGNORECASE
-    ) is not None
+    return re.search(name_id_pattern([prefix], number), text) is not None
+
+
+def name_id_pattern(prefixes: list[str], number: str = r"\d{3}") -> str:
+    """A requirement or AC ID as it is spelled inside an identifier.
+
+    Two ways to start. After anything but a letter or digit, in any case:
+    `test_FR_014`, `test_fr_014`, `FR014Test`. Not \\b: in test_FR_014 the
+    underscore is itself a word character, so \\b never fires next to it.
+
+    Or glued to a lowercase letter, where the ID begins a new camelCase word:
+    `TestFR014Filter`, `testFR014`, `testFr014`. Go requires `Test` in front of
+    a test function, XCTest requires `test`, pytest requires `Test` in front
+    of a class — the idiomatic name in each put a letter before the ID and
+    failed the Definition of Done. The prefix must then be upper or
+    capitalised, so `testNFR014` is NFR-014 and never FR-014, and `addr014`
+    is nothing.
+
+    check-ids.py builds its name pattern here too, so what counts as naming a
+    requirement is decided in one place.
+    """
+    ordered = sorted(prefixes, key=len, reverse=True)
+    any_case = "|".join(ordered)
+    camel = "|".join(v for p in ordered for v in (p.upper(), p.capitalize()))
+    return (
+        rf"(?:(?<![A-Za-z0-9])(?i:{any_case})|(?<=[a-z])(?:{camel}))"
+        rf"[-_]?{number}(?![0-9])"
+    )
+
+
+def _open_entry_names(text: str, ident: str) -> bool:
+    """True when an OPEN or DEFERRED entry of OPEN-QUESTIONS.md names `ident`.
+
+    Entries are `## OQ-NNN` sections; code fences are skipped, so the format
+    sample is never an entry. An entry without a readable **Статус:** does not
+    count: the check says why rather than guessing it is open.
+    """
+    entries: list[list[str]] = []
+    fenced = False
+    for line in text.splitlines():
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
+        if OQ_ENTRY.match(line):
+            entries.append([line])
+        elif line.lstrip().startswith("#"):
+            entries.append([])  # another heading closes the entry
+        elif entries:
+            entries[-1].append(line)
+    own = re.compile(rf"\b{re.escape(ident)}\b")
+    for entry in entries:
+        if not entry or not any(own.search(ln) for ln in entry):
+            continue
+        field = next((ln for ln in entry if STATUS_FIELD.match(ln)), "")
+        found = OQ_STATUS.search(field)
+        if found and found.group(1) in {"OPEN", "DEFERRED"}:
+            return True
+    return False
 
 
 def _acs_for(text: str, req: str) -> list[str]:

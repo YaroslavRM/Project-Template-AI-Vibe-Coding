@@ -28,7 +28,7 @@ jobs:
       # рядок, і воно видно в diff.
       - name: Manifest pin
         run: |
-          expected="aa0e24a61756218aaa01680daaef8406562c4fa98fd671e893b84e624b78628e"
+          expected="eb55146b87b591b98f7f008be1b539087647ff53cfae14d9190838ee26ba11fe"
           actual=$(sha256sum scripts/integrity.sha256 | cut -d' ' -f1)
           if [ "$expected" != "$actual" ]; then
             echo "scripts/integrity.sha256 змінився, а пін у цьому workflow — ні."
@@ -94,7 +94,9 @@ jobs:
             fi
           done < <(git log --no-merges --min-parents=1 --format=%s $range)
           if [ "$fail" != 0 ]; then
-            echo "Клієнтський commit-msg це ловить; --no-verify його зняв. Виправ теми (rebase) — CI не приймає коміт без ID."
+            echo "Клієнтський commit-msg це ловить; --no-verify його зняв. CI не приймає коміт без ID."
+            echo "Тему вже запушеного коміту не виправити без переписування історії й force-push —"
+            echo "це рішення власника (правила, розділ Environments), не агента."
             exit 1
           fi
 

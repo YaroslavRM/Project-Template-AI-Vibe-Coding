@@ -21,6 +21,7 @@ nothing to compare against yet.
 """
 from __future__ import annotations
 
+import importlib.util
 import re
 import subprocess
 import sys
@@ -38,6 +39,18 @@ for _stream in (sys.stdout, sys.stderr):
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# What a test file is, what a test name is and which files are read at all are
+# check-slice.py's decisions. Imported rather than copied: two copies of that
+# list drifted before, and a language one script read and the other did not
+# was checked for invented IDs but could never close a requirement, or the
+# reverse. Both files are pinned by the same manifest.
+_spec = importlib.util.spec_from_file_location(
+    "check_slice", Path(__file__).resolve().parent / "check-slice.py"
+)
+cs = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(cs)
+
 FRS = ROOT / "docs/FRS.md"
 BACKLOG = ROOT / "docs/BACKLOG.md"
 ARCH = ROOT / "docs/ARCHITECTURE.md"
@@ -58,11 +71,7 @@ SKIP_DIRS = {
     "build", "target", ".next", ".turbo", ".gradle", "Pods", "coverage",
     "htmlcov", ".pytest_cache", ".mypy_cache", ".ruff_cache", "tmpBin",
 }
-TEXT_SUFFIXES = {
-    ".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".rb", ".php", ".java",
-    ".kt", ".cs", ".swift", ".sql", ".sh", ".md", ".txt", ".yml", ".yaml",
-    ".toml", ".json", ".html", ".css", ".vue", ".svelte", ".feature",
-}
+TEXT_SUFFIXES = cs.TEXT_SUFFIXES
 MAX_BYTES = 1_000_000
 
 errors: list[str] = []
@@ -188,23 +197,42 @@ if ADR_DIR.is_dir():
         report("requirement IDs", set(REQ_ID.findall(adr_text)) - frs_reqs, where)
         report("acceptance criteria", set(AC_ID.findall(adr_text)) - frs_acs, where)
 
-# In source, the same ID is usually spelled FR_014 or FR014: hyphens are not
-# valid in identifiers, and the rules ask for the ID in the test name.
-# Not \b on the left: in test_FR_014 the underscore is a word character, so a
-# word boundary never fires there. Case-insensitive, because check-slice.py
-# accepts `test_fr_014` as traceability (pep8-naming rejects the capitalised
-# form) — so an invented `fr_999` in exactly that spelling must be caught
-# here too, not only the capitalised one.
-SRC_REQ_ID = re.compile(
-    r"(?<![A-Za-z0-9])(FR|DR|NFR|IR|BR)[-_]?(\d{3})(?![0-9])", re.IGNORECASE
-)
-SRC_AC_ID = re.compile(r"(?<![A-Za-z0-9])AC[-_]?(\d{3})(?![0-9])", re.IGNORECASE)
+# In source an ID is read two ways, and the difference is the point.
+#
+# Anywhere in a file: upper case, with a hyphen or an underscore — `FR-014`,
+# `FR_014`. That is how a reference is written. The case-insensitive,
+# separator-optional reading used to run over every file, and ordinary code
+# matched it: `color: #ac123f` in a stylesheet was an invented AC-123, a locale
+# key `"fr_100"` an invented FR-100, and the commit was blocked for both.
+#
+# In a test *name* — the file name and the lines that declare a test, exactly
+# what check-slice.py reads — every spelling check-slice.py accepts:
+# `test_fr_014`, `FR014Test`, `TestFR014Filter`. An invented `test_fr_999` is
+# still caught there, where it could otherwise stand in for a requirement.
+SRC_REQ_ID = re.compile(r"(?<![A-Za-z0-9])(FR|DR|NFR|IR|BR)[-_](\d{3})(?![0-9])")
+SRC_AC_ID = re.compile(r"(?<![A-Za-z0-9])AC[-_](\d{3})(?![0-9])")
+NAME_REQ_ID = re.compile(cs.name_id_pattern(["FR", "DR", "NFR", "IR", "BR"]))
+NAME_AC_ID = re.compile(cs.name_id_pattern(["AC"]))
+NAME_PARTS = re.compile(r"([A-Za-z]+)[-_]?(\d{3})")
+
+
+def _in_names(pattern: re.Pattern[str], names: str) -> set[str]:
+    out = set()
+    for m in pattern.finditer(names):
+        prefix, number = NAME_PARTS.match(m.group(0)).groups()
+        out.add(f"{prefix.upper()}-{number}")
+    return out
+
 
 for path in source_files():
     text = read(path)
     rel = path.relative_to(ROOT)
-    found_reqs = {f"{p.upper()}-{n}" for p, n in SRC_REQ_ID.findall(text)}
+    found_reqs = {f"{p}-{n}" for p, n in SRC_REQ_ID.findall(text)}
     found_acs = {f"AC-{n}" for n in SRC_AC_ID.findall(text)}
+    if cs._is_test(path):
+        names = cs._test_names(path)
+        found_reqs |= _in_names(NAME_REQ_ID, names)
+        found_acs |= _in_names(NAME_AC_ID, names)
     report("requirement IDs", found_reqs - frs_reqs, str(rel))
     report("acceptance criteria", found_acs - frs_acs, str(rel))
 

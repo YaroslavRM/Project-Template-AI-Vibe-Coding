@@ -25,6 +25,8 @@
       "Bash(git config:*)",
       "Edit(./RulesForAIVibeCoding.md)",
       "Write(./RulesForAIVibeCoding.md)",
+      "Edit(./.gitattributes)",
+      "Write(./.gitattributes)",
       "Edit(./CLAUDE.md)",
       "Write(./CLAUDE.md)",
       "Edit(./AGENTS.md)",

@@ -149,9 +149,11 @@ ENV_GLOB = re.compile(
 # apply inside an interpreter: `*.pem`, `*.key`, anything under `secrets/`.
 # `--key` (no dot), `monkey.keyboard` (not a suffix), `id.key.pub` and a
 # `cfg.key(` method call stay out of it; `cfg.key)` does not, and that false
-# positive is accepted over missing `open('db.key')`.
+# positive is accepted over missing `open('db.key')`. A file needs a name in
+# front of the suffix (`db.key`, `*.pem`): a bare `.key` is a jq filter —
+# `jq -r '.key'` — and was refused as a key file.
 SECRET_PATH = re.compile(
-    r"[^\s\"'(),;:=]*\.(?:pem|key)(?![A-Za-z0-9_.(-])|(?<![A-Za-z0-9_.-])secrets/\S*",
+    r"[^\s\"'(),;:=]+\.(?:pem|key)(?![A-Za-z0-9_.(-])|(?<![A-Za-z0-9_.-])secrets/\S*",
     re.IGNORECASE,
 )
 
@@ -212,6 +214,14 @@ PROTECTED = (
     "stop-integrity.py",
     MANIFEST,
 )
+# Not pinned — it is the owner's machine file, in .gitignore — but it is read
+# by Claude Code as settings, and its hooks and permissions are merged with
+# the committed ones. `cat > .claude/settings.local.json` with
+# `{"disableAllHooks": true}` switched this very guard off from the next
+# session on, in the plainest spelling there is. Edit/Write on it are `ask`
+# (`.claude/**`); through Bash it was neither.
+LOCAL_SETTINGS = "settings.local.json"
+WATCHED = PROTECTED + (LOCAL_SETTINGS,)
 # Commands that only read, run, or merely name the file. `sed` and `perl` are
 # here only without an in-place flag, and so are the other readers that can
 # write: `sort -o`, `awk -i inplace`, `git diff --output`. `uniq` is not here
@@ -220,18 +230,27 @@ PROTECTED = (
 # the path in the text is an argument to open(), not a script to run. `for`,
 # `echo`, `test` name a path without touching it; a redirect on the same
 # segment is still caught by PROTECTED_REDIRECT.
+#
+# `find` only without an action that writes or runs something; `git grep`,
+# `nl`, `xxd`, `od` only read. A pinned script or git hook given as the
+# command word is being run, not written: `./scripts/check-slice.py
+# SLICE-001` used to be refused as "writes to check-slice.py", and an agent
+# told it is writing a file it is only running has to invent a reason.
 PROTECTED_READ = re.compile(
-    r"^(?:cat|head|tail|less|more|wc|grep|rg|diff|ls|stat|file|cut"
+    r"^(?:cat|head|tail|less|more|wc|grep|rg|diff|ls|stat|file|cut|nl|xxd|od"
     r"|for|echo|printf|test|\["
     r"|sha256sum|shasum|md5sum"
+    r"|find\b(?![\s\S]*\s-(?:delete|exec|execdir|ok|okdir|fprint0?|fprintf|fls)\b)"
+    r"|(?:\S*/)?(?:check-template|check-slice|check-ids|bash-guard|stop-integrity)\.py"
+    r"|(?:\S*/)?\.githooks/(?:pre-commit|commit-msg)"
     r"|git\s+(?:diff|show|log)\b(?![\s\S]*--output)"
-    r"|git\s+(?:status|ls-files|blame|add|commit)"
+    r"|git\s+(?:status|ls-files|blame|add|commit|grep)"
     r"|sort\b(?![\s\S]*\s(?:-[A-Za-z]*o|--output))"
     r"|awk\b(?![\s\S]*\s(?:-i|--include)\b)"
     r"|(?:sed|perl)\b(?![\s\S]*\s-[A-Za-z]*i|[\s\S]*--in-place)"
     r"|(?:python3?|py|bash|sh)\b(?![\s\S]*\s-[ce]\b))\b"
 )
-PROTECTED_REDIRECT = re.compile(r">>?\s*[^\s;&|]*(?:" + "|".join(re.escape(p) for p in PROTECTED) + ")")
+PROTECTED_REDIRECT = re.compile(r">>?\s*[^\s;&|]*(?:" + "|".join(re.escape(p) for p in WATCHED) + ")")
 CP_HEAD = re.compile(r"^cp\b")
 # Directories that hold a pinned file. `cp x scripts` writes scripts/x exactly
 # as `cp x scripts/` does, and nothing in the text says `scripts` is a
@@ -245,7 +264,14 @@ PINNED_DIRS = ("scripts", ".githooks", ".claude", ".claude/hooks")
 # segment splitter cuts `for …; do h=$(grep x scripts/integrity.sha256 | …)`
 # into `do h=$(grep x scripts/integrity.sha256`, and that segment used to be
 # refused as a write to the manifest — the first command of an audit session.
-LEAD = re.compile(r"^(?:(?:do|then|else|elif|if|while|until|!)\s+|\w+=\$\(|\$\(|\(|`)+")
+# Also an environment assignment and the wrappers that only run the next word:
+# `PYTHONUTF8=1 python3 scripts/check-slice.py`, `timeout 60 python3 …`. What
+# follows them is judged as the command it is — `env sed -i …` is still sed -i.
+LEAD = re.compile(
+    r"^(?:(?:do|then|else|elif|if|while|until|!)\s+|\w+=\$\(|\$\(|\(|`"
+    r"|[A-Za-z_]\w*=[^\s$`(]*\s+|(?:env|command|time|nice|nohup)\s+"
+    r"|timeout\s+(?:-\S+\s+)*\S+\s+)+"
+)
 # An input redirection reads the file: `done < scripts/integrity.sha256` is a
 # loop reading the manifest. Dropped before the name is looked for, so the
 # write that may stand next to it (`tee <pinned> < x`) is still seen.
@@ -316,7 +342,7 @@ def _cp_pinned_target(plain: str, named: str | None) -> str | None:
     for dest in _cp_destinations(plain.split()[1:]):
         if _under_tmpbin(dest, False):
             continue
-        hit = next((p for p in PROTECTED if p in dest), None)
+        hit = next((p for p in WATCHED if p in dest), None)
         if hit:
             return hit
         if named and ("$" in dest or "`" in dest):
@@ -327,7 +353,7 @@ def _cp_pinned_target(plain: str, named: str | None) -> str | None:
 def manifest_violation(segs: list[str]) -> str | None:
     for seg in segs:
         plain = INPUT_REDIRECT.sub("", LEAD.sub("", unquoted(seg))).strip()
-        hit = next((p for p in PROTECTED if p in plain), None)
+        hit = next((p for p in WATCHED if p in plain), None)
         if CP_HEAD.match(plain):
             # `cp <pinned> elsewhere` is a read of the pinned file; what must
             # not be pinned is where it writes.
@@ -344,6 +370,13 @@ def manifest_violation(segs: list[str]) -> str | None:
                 f"baseline every other check is measured against; rewriting it by hand "
                 f"legitimises whatever was changed. That is --fix, and --fix is the "
                 f"owner's. Reading it — cat, diff, sha256sum -c — is fine."
+            )
+        if hit == LOCAL_SETTINGS:
+            return (
+                f"this command writes to .claude/{LOCAL_SETTINGS}. Its hooks and "
+                f"permissions are merged with the committed settings, so writing it "
+                f"can switch the guards off. It is the owner's machine file "
+                f"(README, section Windows): say what should change in it and why."
             )
         return (
             f"this command writes to {hit}, a file pinned by scripts/{MANIFEST}. "
@@ -547,6 +580,12 @@ def delete_violation(segs: list[str], cwd: str) -> str | None:
 # a prefix). GIT_GLOBALS eats any number of `-x`, `--x`, `-C value`, `-c k=v`.
 # `--no-veri`: git accepts any unambiguous prefix of a long option, and
 # `--no-veri` is one (`--no-v` is not — it collides with --no-verbose).
+#
+# Applied per segment. On the whole line the lookahead ran on into the next
+# command, so `git commit -m "…" && git log -n 1` — the most ordinary thing
+# an agent does after a commit — was refused as --no-verify, and
+# `git push && tail -f log` as a force push. An agent accused of bypassing a
+# hook it never touched has to explain something that did not happen.
 GIT_GLOBALS = r"\bgit(?:\s+-\S*(?:\s+[^-\s;&|]\S*)?)*\s+"
 FLAG_RULES: list[tuple[re.Pattern[str], str]] = [
     (
@@ -572,7 +611,10 @@ FLAG_RULES: list[tuple[re.Pattern[str], str]] = [
 # config key or a path, which quoting can split but prose rarely produces.
 TEXT_RULES: list[tuple[re.Pattern[str], str]] = [
     (
-        re.compile(r"\bgit\s+push\b[\s\S]*?\s\+[^\s;&|]+"),
+        # Kept inside one command: `[^;&|\n]`, not `[\s\S]`, so a `+1` in the
+        # next command is not a refspec; GIT_GLOBALS, so `git -C . push
+        # origin +main` is.
+        re.compile(GIT_GLOBALS + r"push\b[^;&|\n]*?\s\+[^\s;&|]+"),
         "a refspec beginning with + forces the push without the --force flag. "
         "Same answer: irreversible, so it is the owner's call.",
     ),
@@ -733,10 +775,10 @@ def main() -> int:
 
     if reason is None:
         flags = flags_only(command)
-        for pattern, message in FLAG_RULES:
-            if pattern.search(flags):
-                reason = message
-                break
+        reason = next(
+            (m for seg in segments(flags) for p, m in FLAG_RULES if p.search(seg)),
+            None,
+        )
 
     if reason is None:
         for pattern, message in TEXT_RULES:

@@ -74,7 +74,7 @@ Documentation is an agreement, not a working file. You may not edit it on your o
 
 **Allowed without confirmation:**
 
-* change the status field of a slice or task in `docs/BACKLOG.md` (`TODO → IN PROGRESS → DONE / BLOCKED`);
+* change the status of a slice or task in `docs/BACKLOG.md` (`TODO → IN PROGRESS → DONE / BLOCKED`; back to `TODO` when only the session ran out; `BLOCKED → IN PROGRESS` once it is unblocked) — its `**Статус:**` field, and the same status wherever `BACKLOG.md` repeats it: the Coverage Map, and the *Blocked* table, where a row is added when the slice is blocked and removed when it is unblocked;
 * append a row to the Progress Log in `docs/BACKLOG.md`;
 * append a new entry to the end of `docs/OPEN-QUESTIONS.md`.
 
@@ -233,8 +233,10 @@ makes step 5 non-negotiable.
 
 A branch exists for exactly one case: work that could not be finished in the
 session. It is named after the FR it belongs to — `wip/fr-014-order-filter` —
-and it is either finished in the next session or deleted. Nothing else lives
-on a branch.
+and it is either finished by the next session that takes the slice or deleted
+on my OK. For a `BLOCKED` slice that is the session after it is unblocked (see
+*If the slice could not be finished*); until then the branch waits. Nothing
+else lives on a branch.
 
 Finishing it still ends in one commit on `main`: from `main`,
 `git merge --squash wip/fr-014-order-filter` brings the unfinished work into
@@ -266,8 +268,8 @@ Git Bash there is often no `python3` — use `python`; see the *Windows* section
 * the slice exists in `BACKLOG.md`, its `**Статус:**` field is `DONE` or `BLOCKED`, the Progress Log has a dated row for it with that same status
 * every requirement the slice claims — the IDs in its `**Вимоги:**` field, and nowhere else in its block — exists in the FRS
 * `DONE`: every claimed requirement is traceable into `source/`, or into `deploy/` for what the release tooling implements — the test name carries the FR-ID or an AC-ID of it
-* `BLOCKED`: `OPEN-QUESTIONS.md` has an entry that names the slice — the reason it stopped. Its tests are not checked: its code is on a `wip/` branch or nowhere
-* no new `TODO`/`FIXME` in the diff without `OPEN-QUESTIONS.md` being touched in the same diff
+* `BLOCKED`: `OPEN-QUESTIONS.md` has an entry that names the slice and is still open (`**Статус:** OPEN` or `DEFERRED`) — the reason it stopped. Its tests are not checked: its code is on a `wip/` branch or nowhere
+* no new `TODO`/`FIXME` comment in the diff without `OPEN-QUESTIONS.md` being touched in the same diff — the marker right after a comment opener (`#`, `//`, `/*`, `<!--`, `--`, `;`); the bare word is a status in a task tracker, not a loose end
 
 An `AC-*` counts as belonging to a requirement only where the two IDs sit on the
 same **table row or heading** in the FRS, and the requirement is the one that
@@ -292,17 +294,25 @@ Do not leave the session half-done, and never leave `main` half-working:
 
 1. Say plainly what did not work and where you stopped.
 2. Unfinished code does not reach `main`. Commit it to `wip/<fr-id>-<slice>` —
-   `git switch -c` takes the working tree along; stage only the code — or leave
-   it uncommitted and say so.
+   `git switch -c` takes the working tree along; stage only the code, commit as
+   `feat: FR-014 order filter, unfinished` — or leave it uncommitted and say so.
 3. If only the session ran out and nothing blocks the slice, set its status back
    to `TODO` and stop here: the `wip/` branch is the record, and the next
    `/slice-start` finds it.
 4. If something blocks it, then on `main`: the slice's `**Статус:**` set to
    `BLOCKED` with the reason, an entry in `OPEN-QUESTIONS.md` that names the
-   slice, and a Progress Log row with `BLOCKED`. Run `scripts/check-slice.py
-   <SLICE-ID>` and show its output.
+   slice with `**Статус:** OPEN`, and a Progress Log row with `BLOCKED`. Run
+   `scripts/check-slice.py <SLICE-ID>` and show its output.
 5. After my OK, commit those docs alone, on `main`:
    `docs: FR-014 SLICE-005 blocked, OQ-007`.
+
+A `BLOCKED` slice is unblocked by the answer, not by time. Writing the answer
+into its `OPEN-QUESTIONS.md` entry edits an existing entry, so it is mine or
+needs my yes. After that the slice is taken again — by `/slice-start` once
+every entry that names it is `ANSWERED`, or when I say the block is lifted —
+and goes straight to `IN PROGRESS`; its `wip/` branch is resumed as in
+*Branching*. It finishes like any other slice: the answer, the status and the
+code travel in its one commit.
 
 ---
 
@@ -322,7 +332,10 @@ The end-to-end key is the `FR-ID`. It survives all the way to the commit.
   function name** — not in a comment or a docstring. `FR-014`, `FR_014` and
   `FR014` all count, in any case: `test_fr_014_filter` is as valid as
   `test_FR_014_filter`, because pep8-naming rejects the capitalised form and a
-  project should not have to choose between a red linter and a red DoD
+  project should not have to choose between a red linter and a red DoD. Glued
+  to a test prefix it counts too, when it starts a new camelCase word in upper
+  case or capitalised: `TestFR014Filter` (Go, pytest classes), `testFR014`
+  (XCTest)
 * A `wip/` branch, if one is needed at all, carries the FR-ID: `wip/fr-014-order-filter`
 
 If a change does not map to any FR — stop. Either the work is unnecessary, or there is a hole in the FRS.
@@ -483,7 +496,10 @@ On my deploy command:
 
 1. The release task already exists in *Tech Tasks* of `BACKLOG.md`, with
    `**Тип:** release`. If it does not, propose it — that is a change to
-   `BACKLOG.md` and needs my yes. Never choose its number yourself.
+   `BACKLOG.md` and needs my yes. Never choose its number yourself. An agreed
+   new task is written into `BACKLOG.md` in step 4, next to `DEPLOY.md`, not
+   now: step 3 needs a clean working tree, and the task has no commit of its
+   own.
 2. A change to `deploy/` is not part of the release. It is a `TASK-*` of its
    own, finished, run locally and committed before the release starts — never
    edited mid-deploy.

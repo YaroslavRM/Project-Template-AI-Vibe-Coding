@@ -9,7 +9,7 @@ Checks:
   2. the project skeleton is in place (same list as the rules, section
      "Project structure");
   3. .gitignore excludes tmpBin/* and keeps .gitkeep;
-  4. git hooks are actually wired up (core.hooksPath).
+  4. git hooks are actually wired up (core.hooksPath) and executable.
 
 Plus non-blocking warnings: documents still untouched, local verification
 command not filled in.
@@ -360,6 +360,20 @@ try:
         )
 except (OSError, subprocess.SubprocessError):
     warnings.append("git not available — hooks not checked")
+
+# A hook git cannot execute is skipped with nothing more than a hint, and the
+# commit goes through unchecked. The repository records both hooks as 100755,
+# but a template unpacked from an archive that dropped the mode — the manual
+# setups in README.md — lands on Linux or macOS with them at 644. Windows
+# does not look at the bit, so there is nothing to check there.
+if os.name != "nt":
+    for rel in (".githooks/pre-commit", ".githooks/commit-msg"):
+        hook = ROOT / rel
+        if hook.is_file() and not os.access(hook, os.X_OK):
+            errors.append(
+                f"{rel} is not executable — git skips it, and commits pass "
+                f"unchecked. Run: chmod +x .githooks/*"
+            )
 
 # --- 4b. python3 actually runs, instead of guessing from its path -----------
 # .claude/settings.json invokes python3 for both agent hooks. A fresh Windows

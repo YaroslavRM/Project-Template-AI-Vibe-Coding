@@ -162,6 +162,13 @@ Product modules · Features · Inputs/Outputs · Business Rules · Dependencies 
 **5. Data Requirements**
 Entities · Attributes · Data Types · Required/Optional · Relationships · Validation Rules · Defaults · Unique Constraints · Statuses · Lifecycle · Data Ownership · Migration · Audit Log · Retention · Archival/Deletion
 
+Окремо — **налаштування, які змінює адміністратор чи користувач**. Для кожного:
+що воно робить, допустимі значення й одиниці, значення за замовчуванням, коли
+зміна набирає сили (одразу / після перезапуску / після нового релізу). Якщо
+налаштування змінюються в UI-панелі — чи показує вона підказку біля кожного
+параметра і що в ній. Підказка — видима частина продукту: вона отримує AC, як
+будь-який інший UI, інакше агент у кроці 4 не матиме з чого її взяти.
+
 **6. Integrations, Workflows & Notifications**
 External Systems · APIs · Integration direction · Data exchanged · Authentication · Triggers · Error handling · Retry behavior · Integration availability · Workflows · Status Models · Status Transitions · Notifications · Channels · Search · Reporting
 

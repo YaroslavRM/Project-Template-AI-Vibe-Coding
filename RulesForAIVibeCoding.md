@@ -24,7 +24,7 @@ scripts/check-ids.py      traceability by ID: nothing may reference a requiremen
 scripts/check-slice.py    the mechanical part of the Definition of Done
 scripts/integrity.sha256  pinned hashes for the rules and for every check listed above
 source/                   project code
-deploy/                   install / update / rollback scripts — built by a TASK before the first deploy
+deploy/                   release tooling — its contents are decided in ARCHITECTURE.md; built by a TASK before the first release
 tmpBin/                   development tooling (venv, local binaries, toolchains)
 .githooks/                commit-msg (traceability) + pre-commit (integrity + IDs)
 .github/workflows/        the same checks, server-side — --no-verify cannot reach them (optional: a project with no GitHub may delete it)
@@ -38,7 +38,7 @@ tmpBin/                   development tooling (venv, local binaries, toolchains)
 .env.example
 ```
 
-If something from this list is missing, **stop and tell me** — do not recreate it from memory. A silently rebuilt skeleton without `.githooks/` or `.gitattributes` looks fine and enforces nothing. Keep empty directories with a `.gitkeep`. Items that may legitimately be absent: `.github/workflows/`, only when the project has no GitHub; `deploy/` and `docs/DEPLOY.md`, only until the first release. `scripts/check-template.py` is the authority on the rest.
+If something from this list is missing, **stop and tell me** — do not recreate it from memory. A silently rebuilt skeleton without `.githooks/` or `.gitattributes` looks fine and enforces nothing. Keep empty directories with a `.gitkeep`. Items that may legitimately be absent: `.github/workflows/`, only when the project has no GitHub; `docs/DEPLOY.md`, only until step 2 (`prompts/02-solution-setup.md`) produces its skeleton; `deploy/`, only until the first release. `scripts/check-template.py` is the authority on the rest.
 
 ### The checks are not yours to edit
 
@@ -59,7 +59,7 @@ So: you do not edit those files, you do not edit the manifest, and you never run
 | `docs/FRS.md` | Requirements. Source of truth. `BR-*` (business level — implemented through an `FR-*`, never committed against), `FR-*`, `DR-*`, `NFR-*`, `IR-*` + Acceptance Criteria |
 | `docs/ARCHITECTURE.md` | Components, boundaries, stack, environments, deployment, migrations, rollback |
 | `docs/ADR/*.md` | Technical decisions and their reasons |
-| `docs/DEPLOY.md` | Runbook for the current release: version, the commit it is built from and the local verification that ran on that commit, what changes, migrations, the exact `deploy/` commands, the checks to run after the deploy, rollback. It holds the plan, not the outcome — the outcome goes to the Progress Log. Created at the first release, updated at every release |
+| `docs/DEPLOY.md` | Runbook for the current release: version, the commit the artifact is built from and the local verification that ran on that commit, what changes, the exact release commands, the checks to run after the release, what to do if it fails. Everything else in it depends on the platform, so its sections come from step 2 (`prompts/02-solution-setup.md`) as a skeleton. It holds the plan, not the outcome — the outcome goes to the Progress Log. Filled in at the first release, updated at every release |
 | `docs/BACKLOG.md` | Vertical slices, tech tasks, statuses, dependencies, order |
 | `docs/OPEN-QUESTIONS.md` | Unresolved questions |
 
@@ -182,8 +182,16 @@ The explanation says what the FRS and `ARCHITECTURE.md` say. If you do not know
 what a setting means, what it accepts, or what its default is, that is a
 question — not a plausible comment. A comment you made up looks like agreement.
 
-If the chosen file format cannot hold comments, do not invent workarounds such
-as `"_comment"` keys that the application then has to ignore. Say so and ask.
+A comment in a file is documentation. A hint in a UI panel is something the
+user sees, so it is UI like any other: it comes from an `FR-*` or its AC, and a
+UI test checks it. If the FRS has the panel but says nothing about its hints,
+that is a question — do not add hints no requirement asked for, and do not
+silently leave them out either.
+
+Environment variables have no file of their own: their explanation lives in
+`.env.example`, next to each key. If the chosen file format cannot hold
+comments, do not invent workarounds such as `"_comment"` keys that the
+application then has to ignore. Say so and ask.
 
 This covers what administrators and users configure. Development tooling —
 linter, test-runner, editor configs — is not in scope.
@@ -384,7 +392,7 @@ Never deploy, run migrations, or execute commands against test/prod unless it is
 
 * **Local** — free.
 * **Test** — only on an explicit command.
-* **Prod** — only on an explicit command, with a rollback plan stated before launch.
+* **Prod** — only on an explicit command, with a plan for a failed release — a rollback, or what replaces it — stated before launch.
 
 Irreversible actions (drop, truncate, force push, deleting files outside the working branch, changes inside `.git/`) — always ask.
 
@@ -398,28 +406,40 @@ Irreversible actions (drop, truncate, force push, deleting files outside the wor
 
 ### Releases and deployment
 
-The scheme — environments, how deployment works, how rollback works — lives in
-`ARCHITECTURE.md`, section *Environments & Delivery*. The runbook for a concrete
-release lives in `docs/DEPLOY.md`. They do not repeat each other: `DEPLOY.md`
-refers to the scheme and adds only what is specific to this release. If a
-release needs the scheme itself to change, that is a change to
+What a release is depends on the platform: a server rollout, a store
+submission, an installer or a package published to a channel. The template
+does not know which, so this section keeps only what holds for all of them.
+Here and in the rest of the rules, *test* and *prod* mean whatever
+`ARCHITECTURE.md` names for this project — a test server, TestFlight or an
+internal track, a beta channel — and to *deploy* is to put a build there.
+
+The scheme — environments or channels, how a build gets there, what happens
+when a release fails — lives in `ARCHITECTURE.md`, section *Environments &
+Delivery*. The runbook for a concrete release lives in `docs/DEPLOY.md`, whose
+sections step 2 derived from that scheme. They do not repeat each other:
+`DEPLOY.md` refers to the scheme and adds only what is specific to this
+release. If a release needs the scheme itself to change, that is a change to
 `ARCHITECTURE.md` first.
 
-Installation, update and rollback are scripts in `deploy/`, not commands typed
-by hand:
+What holds on every platform:
 
-* `install` — sets up the environment and the application from scratch;
-* `update` — moves a running installation to the next release, migrations included;
-* `rollback` — returns it to the previous release.
-
-The scripts are work without an FR: a `TASK-*` in *Tech Tasks*, planned before
-the first deploy to test. Their language and form follow `ARCHITECTURE.md`;
-anything it does not decide is a question, not an implementation detail. Every
-script runs locally before it is ever pointed at test or prod — `rollback`
-included, because a rollback that has never run is not a plan. That task also
-proves the package `install` / `update` delivers contains no tests, no test
-tooling and no baselines — a check in the script, not a promise. Test and prod
-receive the same package.
+* Building and delivering a release is tooling in `deploy/`, not commands
+  typed by hand — scripts, a pipeline definition, a store-upload
+  configuration, whatever `ARCHITECTURE.md` chose. It is work without an FR: a
+  `TASK-*` in *Tech Tasks*, planned before the first release to test. Anything
+  `ARCHITECTURE.md` does not decide about it is a question, not an
+  implementation detail.
+* Every part of that tooling runs locally, or against a sandbox the platform
+  provides, before it is ever pointed at test or prod.
+* The released artifact carries no tests, no test tooling and no baselines —
+  proved by a check in the tooling, not by a promise. Test and prod receive
+  the same artifact: what was checked in test is what ships.
+* What to do when a release fails is decided before it reaches prod. Where the
+  platform can roll back, that is a rollback in `deploy/`, and it has been run
+  locally — a rollback that has never run is not a plan. Where it cannot — a
+  store release stays on the devices that already installed it —
+  `ARCHITECTURE.md` names what replaces it: halting a staged rollout, a fix
+  release, a server-side switch.
 
 A release is a `TASK-*` of its own, and it is the one task with exactly two
 commits: one before the deploy, one after it. The outcome of a deploy does not
@@ -434,9 +454,9 @@ apply to a release task; nothing else is exempt from it. On my deploy command:
    own, finished, run locally and committed before the release starts — never
    edited mid-deploy.
 3. Run the local verification command — UI tests included — on the commit the
-   package will be built from, and show the real output. The package carries
-   no tests, so it is the commit that gets verified, not the package. Red means
-   no deploy and no runbook.
+   artifact will be built from, and show the real output. The artifact carries
+   no tests, so it is the commit that gets verified, not the artifact. Red
+   means no deploy and no runbook.
 4. Update `docs/DEPLOY.md` for this release: the hash of the commit verified in
    step 3 and the verification that ran on it, taken from the output you have
    just shown — never written ahead of it. Post-deploy checks go in as checks
@@ -445,17 +465,18 @@ apply to a release task; nothing else is exempt from it. On my deploy command:
    row — `docs: TASK-0XX release 1.2 runbook`. It touches only `docs/`; if
    anything outside `docs/` changed since step 3, the verification no longer
    covers it — go back to step 3.
-6. Only then deploy, by the rules above. For prod, the rollback section of
-   `DEPLOY.md` is the rollback plan that must be stated before launch.
+6. Only then deploy, by the rules above. For prod, the section of `DEPLOY.md`
+   on a failed release is the plan that must be stated before launch.
 7. Run the post-deploy checks from `DEPLOY.md` and show the real output. If the
-   deploy or the checks fail, stop and tell me. A rollback is a deploy too: it
-   runs on my command.
+   deploy or the checks fail, stop and tell me. Whatever `DEPLOY.md` says to do
+   on failure — a rollback, halting a rollout — is a deploy too: it runs on my
+   command.
 8. Second commit, after my OK: the task set to `DONE` — or to `BLOCKED`, with
-   an entry in `OPEN-QUESTIONS.md`, if the release was rolled back or
+   an entry in `OPEN-QUESTIONS.md`, if the release was rolled back, halted or
    abandoned — and a Progress Log row: `docs: TASK-0XX release 1.2 deployed`
-   (or `rolled back`). Run `scripts/check-slice.py TASK-0XX` before this
-   commit, not before the first one: until the deploy is over the task is not
-   done.
+   (or what happened instead: `rolled back`, `halted`). Run
+   `scripts/check-slice.py TASK-0XX` before this commit, not before the first
+   one: until the deploy is over the task is not done.
 
 ---
 

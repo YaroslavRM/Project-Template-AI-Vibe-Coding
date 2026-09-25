@@ -25,6 +25,8 @@
       "Write(./docs/ARCHITECTURE.md)",
       "Edit(./docs/ADR/**)",
       "Write(./docs/ADR/**)",
+      "Edit(./docs/DEPLOY.md)",
+      "Write(./docs/DEPLOY.md)",
       "Edit(./scripts/**)",
       "Write(./scripts/**)",
       "Edit(./.githooks/**)",

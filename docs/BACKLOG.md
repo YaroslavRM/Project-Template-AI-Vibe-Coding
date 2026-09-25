@@ -55,7 +55,7 @@
 ### TASK-XXX — <назва>
 
 **Статус:** TODO
-**Тип:** infra | ci | deps | debt | tooling
+**Тип:** infra | ci | deps | debt | tooling | release
 **Причина:**
 **Обсяг:**
 -

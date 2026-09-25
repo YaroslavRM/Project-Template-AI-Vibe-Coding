@@ -59,7 +59,7 @@ So: you do not edit those files, you do not edit the manifest, and you never run
 | `docs/FRS.md` | Requirements. Source of truth. `BR-*` (business level — implemented through an `FR-*`, never committed against), `FR-*`, `DR-*`, `NFR-*`, `IR-*` + Acceptance Criteria |
 | `docs/ARCHITECTURE.md` | Components, boundaries, stack, environments, deployment, migrations, rollback |
 | `docs/ADR/*.md` | Technical decisions and their reasons |
-| `docs/DEPLOY.md` | Runbook for the current release: version, what changes, migrations, the exact `deploy/` commands, the local verification result, post-deploy verification, rollback. Created at the first release, updated at every release |
+| `docs/DEPLOY.md` | Runbook for the current release: version, the commit it is built from and the local verification that ran on that commit, what changes, migrations, the exact `deploy/` commands, the checks to run after the deploy, rollback. It holds the plan, not the outcome — the outcome goes to the Progress Log. Created at the first release, updated at every release |
 | `docs/BACKLOG.md` | Vertical slices, tech tasks, statuses, dependencies, order |
 | `docs/OPEN-QUESTIONS.md` | Unresolved questions |
 
@@ -421,16 +421,41 @@ proves the package `install` / `update` delivers contains no tests, no test
 tooling and no baselines — a check in the script, not a promise. Test and prod
 receive the same package.
 
-A release is a `TASK-*` of its own. On my deploy command:
+A release is a `TASK-*` of its own, and it is the one task with exactly two
+commits: one before the deploy, one after it. The outcome of a deploy does not
+exist until the deploy has run, so a single commit would have to either claim
+it in advance or leave it out. The one-commit rule of the *Work cycle* does not
+apply to a release task; nothing else is exempt from it. On my deploy command:
 
-1. Update `docs/DEPLOY.md` for this release. Show it as a diff and wait for my yes.
-2. If the release needs a change to `deploy/`, that change is finished, checked
-   locally and committed first — never edited mid-deploy.
-3. Commit `DEPLOY.md` under the release task: `docs: TASK-0XX release 1.2 runbook`.
-4. Run the local verification command — UI tests included — on the build being
-   deployed, and show the real output. Red means no deploy.
-5. Only then deploy, by the rules above. For prod, the rollback section of
+1. The release task already exists in *Tech Tasks* of `BACKLOG.md`. If it does
+   not, propose it — that is a change to `BACKLOG.md` and needs my yes. Never
+   choose its number yourself.
+2. A change to `deploy/` is not part of the release. It is a `TASK-*` of its
+   own, finished, run locally and committed before the release starts — never
+   edited mid-deploy.
+3. Run the local verification command — UI tests included — on the commit the
+   package will be built from, and show the real output. The package carries
+   no tests, so it is the commit that gets verified, not the package. Red means
+   no deploy and no runbook.
+4. Update `docs/DEPLOY.md` for this release: the hash of the commit verified in
+   step 3 and the verification that ran on it, taken from the output you have
+   just shown — never written ahead of it. Post-deploy checks go in as checks
+   to run, not as results. Show it as a diff and wait for my yes.
+5. First commit: `DEPLOY.md`, the task set to `IN PROGRESS`, a Progress Log
+   row — `docs: TASK-0XX release 1.2 runbook`. It touches only `docs/`; if
+   anything outside `docs/` changed since step 3, the verification no longer
+   covers it — go back to step 3.
+6. Only then deploy, by the rules above. For prod, the rollback section of
    `DEPLOY.md` is the rollback plan that must be stated before launch.
+7. Run the post-deploy checks from `DEPLOY.md` and show the real output. If the
+   deploy or the checks fail, stop and tell me. A rollback is a deploy too: it
+   runs on my command.
+8. Second commit, after my OK: the task set to `DONE` — or to `BLOCKED`, with
+   an entry in `OPEN-QUESTIONS.md`, if the release was rolled back or
+   abandoned — and a Progress Log row: `docs: TASK-0XX release 1.2 deployed`
+   (or `rolled back`). Run `scripts/check-slice.py TASK-0XX` before this
+   commit, not before the first one: until the deploy is over the task is not
+   done.
 
 ---
 

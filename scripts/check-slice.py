@@ -34,7 +34,10 @@ ROOT = Path(__file__).resolve().parent.parent
 BACKLOG = ROOT / "docs/BACKLOG.md"
 FRS = ROOT / "docs/FRS.md"
 OQ = ROOT / "docs/OPEN-QUESTIONS.md"
-SOURCE = ROOT / "source"
+# Where a test that carries a requirement ID may live: the application's code,
+# and the release tooling — a backup or a migration a task implements is
+# tested next to the script that does it, not inside source/.
+TEST_ROOTS = ("source", "deploy")
 
 ID_ARG = re.compile(r"^(SLICE|TASK)-\d{3}$")
 REQ_ID = re.compile(r"\b(?:FR|DR|NFR|IR)-\d{3}\b")
@@ -63,12 +66,26 @@ MAX_RANGE = 99  # a wider span is a typo, not a range
 # (`### AC-001 (FR-002)`) both state one mapping deliberately. A sentence that
 # happens to mention several IDs does not.
 MAPPING_LINE = re.compile(r"^\s*(?:\||#{1,6}\s)")
+# Where a heading's own IDs end and its name begins: `#### AC-001 (FR-002) —
+# назва, як у FR-003`. Only the part before the dash says whose AC it is.
+HEADING_NAME = re.compile(r"\s[-–—]\s")
 STATUS = re.compile(r"\b(TODO|IN PROGRESS|DONE|BLOCKED)\b")
 # The status is read from the `**Статус:**` field, never from the block as a
 # whole. The heading is part of the block, and a slice called
 # `SLICE-001 — Mark order DONE` used to report DONE while its field had not
-# moved at all: a false yes. `**Status:**` is accepted for an English backlog.
-STATUS_FIELD = re.compile(r"^\s*[-*]?\s*\*{0,2}\s*(?:Статус|Status)\s*:", re.IGNORECASE)
+# moved at all: a false yes. `**Status:**` is accepted for an English backlog,
+# and so is the colon outside the bold (`**Статус**:`), which is how many
+# editors and models write the same field.
+STATUS_FIELD = re.compile(
+    r"^\s*[-*]?\s*\*{0,2}\s*(?:Статус|Status)\s*\*{0,2}\s*:", re.IGNORECASE
+)
+# The requirements a slice claims are the IDs in its `**Вимоги:**` field and
+# nowhere else. Reading the whole block made a mention in `**Ризики:**` or
+# `**Поза обсягом:**` a claim, and the Definition of Done then demanded a test
+# for a requirement that belongs to another slice.
+REQS_FIELD = re.compile(
+    r"^\s*[-*]?\s*\*{0,2}\s*(?:Вимоги|Requirements)\s*\*{0,2}\s*:", re.IGNORECASE
+)
 DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 
 # Only the fallback for a working copy with no usable git — the real filter is
@@ -89,10 +106,16 @@ SKIP_DIRS = {
 # generous across ecosystems; the failure message names these patterns so a
 # project with another layout knows why it failed.
 TEST_NAME = re.compile(
-    r"(?:^test[_.-]|[_.-]test\.|[_.-]tests\.|test\.[a-z]+$|tests?\.[a-z]+$"
-    r"|[_.-]spec\.|spec\.[a-z]+$|\.feature$)",
+    r"(?:^test[_.-]|[_.-]tests?\.|^tests?\.[a-z]+$"
+    r"|[_.-]spec\.|^spec\.[a-z]+$|\.feature$)",
     re.IGNORECASE,
 )
+# Java, C#, Kotlin, Swift and PHP name a test class OrderTest, OrderTests or
+# OrderSpec. Case-sensitive and after a lowercase letter or digit on purpose:
+# the earlier `test\.[a-z]+$` was unanchored and case-blind, so an ordinary
+# `latest.py` or `fastest.ts` counted as a test file, and any `def fr_005_x()`
+# in it closed FR-005 without a single test.
+CAMEL_TEST_NAME = re.compile(r"[a-z0-9](?:Tests?|Spec)\.[A-Za-z]+$")
 TEST_DIRS = {"test", "tests", "spec", "specs", "__tests__", "testing"}
 # A line that gives a test its name. Given/When/Then are step text, not names,
 # so they are not here: an ID in a step is a comment by another spelling.
@@ -168,7 +191,7 @@ def git(*args: str) -> str:
 
 
 def source_files() -> list[Path]:
-    """Files under source/ that belong to the project.
+    """Files under source/ and deploy/ that belong to the project.
 
     The list comes from git: tracked files, plus untracked ones that .gitignore
     does not exclude. That is the definition of "the project's own code", and it
@@ -180,14 +203,15 @@ def source_files() -> list[Path]:
     requirement is found in source/ and the check reports them as untested —
     loud, not silent.
     """
-    if not SOURCE.is_dir():
+    roots = [r for r in TEST_ROOTS if (ROOT / r).is_dir()]
+    if not roots:
         return []
     listing = git_out(
-        "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "source"
+        "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", *roots
     )
     if listing is None:
         print("WARN:  git unavailable — falling back to the SKIP_DIRS name list")
-        candidates = list(SOURCE.rglob("*"))
+        candidates = [p for r in roots for p in (ROOT / r).rglob("*")]
     else:
         # A merge conflict lists the same path once per stage; dedupe, keep order.
         candidates = [ROOT / rel for rel in dict.fromkeys(listing.split("\0")) if rel]
@@ -272,8 +296,6 @@ def main() -> int:
     block = slice_block(backlog, slice_id)
     check(bool(block), f"{slice_id} exists as a section in docs/BACKLOG.md")
 
-    block_text = "\n".join(block)
-
     # Status moved to DONE or BLOCKED, read from the status field only.
     field = next((ln for ln in block[1:] if STATUS_FIELD.match(ln)), None)
     statuses = STATUS.findall(field) if field else []
@@ -295,21 +317,26 @@ def main() -> int:
     if not progress_log:
         check(False, "docs/BACKLOG.md has no Progress Log section")
     else:
-        def cells(line: str) -> list[str]:
-            return [c.strip() for c in line.strip().strip("|").split("|")]
+        # The status cell is read by its first word: `BLOCKED (OQ-007)` is a
+        # BLOCKED row. An exact match failed the check for a row that carried
+        # the reason next to the status, as the cycle command asks for.
+        def row_statuses(line: str) -> set[str]:
+            found = (STATUS.match(c.strip()) for c in line.strip().strip("|").split("|"))
+            return {m.group(1) for m in found if m}
 
         logged = any(
             line.strip().startswith("|")
             and re.search(rf"\b{re.escape(slice_id)}\b", line) and DATE.search(line)
-            and (status is None or status in cells(line))
+            and (status is None or status in row_statuses(line))
             for line in progress_log
         )
         check(logged, f"Progress Log has a dated row for {slice_id} with status {status or '?'}")
 
-    # Every requirement the slice claims is traceable into source/.
-    claimed = sorted(set(REQ_ID.findall(block_text)))
+    # The requirements the slice claims: its **Вимоги:** field, nothing else.
+    reqs_field = next((ln for ln in block[1:] if REQS_FIELD.match(ln)), None)
+    claimed = sorted(set(REQ_ID.findall(reqs_field))) if reqs_field else []
     if slice_id.startswith("SLICE-"):
-        check(bool(claimed), f"{slice_id} names at least one requirement ID")
+        check(bool(claimed), f"{slice_id} names at least one requirement ID in **Вимоги:**")
     if claimed:
         frs_text = read(FRS)
         # \b, not `in`: "FR-011" is a substring of "NFR-011", and in any real
@@ -318,6 +345,16 @@ def main() -> int:
         unknown = [r for r in claimed if not re.search(rf"\b{re.escape(r)}\b", frs_text)]
         check(not unknown, f"all requirement IDs exist in FRS ({', '.join(unknown) or 'ok'})")
 
+    # A BLOCKED slice did not finish, so its code is on a wip/ branch or
+    # nowhere, and demanding its tests on main made BLOCKED a status the
+    # Definition of Done allowed and could never pass. What a BLOCKED slice
+    # owes instead is the reason, where the next session will look for it.
+    if status == "BLOCKED":
+        check(
+            bool(re.search(rf"\b{re.escape(slice_id)}\b", read(OQ))),
+            f"docs/OPEN-QUESTIONS.md has an entry naming {slice_id} (why it is blocked)",
+        )
+    elif claimed:
         # The rules require the test name to carry the FR-ID or an AC-ID of it.
         frs_acs_for = {req: _acs_for(frs_text, req) for req in claimed}
         for line in _unmapped_acs(frs_text):
@@ -331,9 +368,9 @@ def main() -> int:
         tests = [p for p in source_files() if _is_test(p)]
         if not tests:
             print(
-                "WARN:  no test files found under source/. Looked for names like "
-                "test_*, *_test.*, *.spec.*, *.feature, and anything under "
-                "test/ tests/ spec/ __tests__/."
+                "WARN:  no test files found under source/ or deploy/. Looked for "
+                "names like test_*, *_test.*, *.spec.*, *Test.*, *.feature, and "
+                "anything under test/ tests/ spec/ __tests__/."
             )
         for path in tests:
             if len(found) == len(wanted):
@@ -345,7 +382,7 @@ def main() -> int:
         untested = [req for req in claimed if req not in found]
         check(
             not untested,
-            "every claimed requirement appears in source/ (test names carry the ID): "
+            "every claimed requirement appears in source/ or deploy/ (test names carry the ID): "
             + (", ".join(untested) or "ok"),
         )
 
@@ -376,7 +413,7 @@ def main() -> int:
         ]
 
     untracked = git_out(
-        "ls-files", "-z", "--others", "--exclude-standard", "--", "source", "docs"
+        "ls-files", "-z", "--others", "--exclude-standard", "--", "source", "deploy", "docs"
     ) or ""
     untracked_paths = [f for f in untracked.split("\0") if f]
     new_marker_files = [
@@ -457,7 +494,7 @@ def _is_test(path: Path) -> bool:
     """A code file whose name or folder says it holds tests."""
     if path.suffix.lower() not in TEST_SUFFIXES:
         return False
-    if TEST_NAME.search(path.name):
+    if TEST_NAME.search(path.name) or CAMEL_TEST_NAME.search(path.name):
         return True
     return any(part.lower() in TEST_DIRS for part in path.parts)
 
@@ -503,12 +540,35 @@ def _acs_for(text: str, req: str) -> list[str]:
     This is stricter than the window, on purpose. An AC that no line ties to a
     requirement widens nothing, and _unmapped_acs() says so out loud rather
     than letting the check quietly tighten.
+
+    Sharing the line is not enough on its own: the requirement must be the one
+    the line is about (_owners). A matrix row `| FR-006 | Як FR-007, але … |
+    … | AC-006 |` used to hand AC-006 to FR-007 as well, and a test named after
+    AC-006 closed FR-007 with no test of its own.
     """
     out: set[str] = set()
     for line in text.splitlines():
-        if re.search(rf"\b{re.escape(req)}\b", line):
+        if MAPPING_LINE.match(line) and req in _owners(line):
             out.update(_acs_in(line))
     return sorted(out)
+
+
+def _owners(line: str) -> set[str]:
+    """The requirement(s) a mapping line is about.
+
+    A table row: the first cell that holds a requirement ID — the key column
+    of the Traceability Matrix, or the FR column of an AC table whose first
+    cell is the AC. A heading: the IDs before the dash that starts its name.
+    Any other requirement further along — a description, a Related column,
+    the name of the heading — is a mention, not a mapping.
+    """
+    if line.lstrip().startswith("|"):
+        for cell in line.strip().strip("|").split("|"):
+            ids = REQ_ID.findall(cell)
+            if ids:
+                return set(ids)
+        return set()
+    return set(REQ_ID.findall(HEADING_NAME.split(line, maxsplit=1)[0]))
 
 
 def _acs_in(line: str) -> set[str]:
@@ -535,7 +595,7 @@ def _unmapped_acs(text: str) -> list[str]:
     every: set[str] = set(AC_ID.findall(text))
     for line in text.splitlines():
         found = _acs_in(line)
-        if found and REQ_ID.search(line):
+        if found and _owners(line):
             mapped.update(found)
     orphans = sorted(every - mapped)
     if not orphans:

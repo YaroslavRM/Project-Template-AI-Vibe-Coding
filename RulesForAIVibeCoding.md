@@ -62,11 +62,11 @@ The same holds for the files that carry these rules to an agent: `CLAUDE.md`, `A
 | `docs/FRS.md` | Requirements. Source of truth. `BR-*` (business level — implemented through an `FR-*`, never committed against), `FR-*`, `DR-*`, `NFR-*`, `IR-*` + Acceptance Criteria |
 | `docs/ARCHITECTURE.md` | Components, boundaries, stack, environments, deployment, migrations, rollback |
 | `docs/ADR/*.md` | Technical decisions and their reasons |
-| `docs/DEPLOY.md` | Runbook for the current release: version, the commit that was verified and the local verification that ran on it (the artifact is built from the runbook commit on top of it, which changes only `docs/`), what changes, the exact release commands, the checks to run after the release, what to do if it fails. Everything else in it depends on the platform, so its sections come from step 2 (`prompts/02-solution-setup.md`) as a skeleton. It holds the plan, not the outcome — the outcome goes to the Progress Log. Filled in at the first release, updated at every release |
+| `docs/DEPLOY.md` | Runbook for the current release: version, the commit that was verified and the local verification that ran on it (the artifact is built from the runbook commit on top of it, which changes only `docs/`; a release to prod ships the test release's artifact instead of building one), what changes, the exact release commands, the checks to run after the release, what to do if it fails. Everything else in it depends on the platform, so its sections come from step 2 (`prompts/02-solution-setup.md`) as a skeleton. It holds the plan, not the outcome — the outcome goes to the Progress Log. Filled in at the first release, updated at every release |
 | `docs/BACKLOG.md` | Vertical slices, tech tasks, statuses, dependencies, order |
 | `docs/OPEN-QUESTIONS.md` | Unresolved questions |
 
-Read `BACKLOG.md` in full at the start of every session — it is the index, and it stays short. `FRS.md` and `ARCHITECTURE.md` are **not** read in full: locate the IDs and the sections you need by search. See *Reading the docs*.
+Read `BACKLOG.md` in full at the start of every session — it is the index. `FRS.md` and `ARCHITECTURE.md` are **not** read in full: locate the IDs and the sections you need by search. See *Reading the docs*.
 
 ### Changing docs/
 
@@ -155,7 +155,9 @@ decided there; if they are not, it is a question, not a tool you pick.
 
 * In step 4 the UI test is written against the AC before the UI code, like any
   other test. Its file or function name carries the FR-ID or AC-ID, and it lives
-  under `source/` — `check-slice.py` does not look anywhere else.
+  under `source/` — `check-slice.py` reads test names only there and in
+  `deploy/`, and a UI test belongs to the application, not to the release
+  tooling.
 * Visual baselines (reference screenshots) are not yours to accept.
   Regenerating them makes every visual test pass, exactly as `--fix` makes the
   integrity check pass. When a baseline must change, show me the old and the new
@@ -234,6 +236,11 @@ session. It is named after the FR it belongs to — `wip/fr-014-order-filter` �
 and it is either finished in the next session or deleted. Nothing else lives
 on a branch.
 
+Finishing it still ends in one commit on `main`: from `main`,
+`git merge --squash wip/fr-014-order-filter` brings the unfinished work into
+the working tree, the slice is finished there, and it is committed like any
+other. The branch is deleted after that, on my OK.
+
 ### Implementation options
 
 When a decision is non-trivial:
@@ -257,15 +264,19 @@ Git Bash there is often no `python3` — use `python`; see the *Windows* section
 `README.md`), and you paste its real output:
 
 * the slice exists in `BACKLOG.md`, its `**Статус:**` field is `DONE` or `BLOCKED`, the Progress Log has a dated row for it with that same status
-* every requirement the slice claims exists in the FRS
-* every claimed requirement is traceable into `source/` — the test name carries the FR-ID or an AC-ID of it
+* every requirement the slice claims — the IDs in its `**Вимоги:**` field, and nowhere else in its block — exists in the FRS
+* `DONE`: every claimed requirement is traceable into `source/`, or into `deploy/` for what the release tooling implements — the test name carries the FR-ID or an AC-ID of it
+* `BLOCKED`: `OPEN-QUESTIONS.md` has an entry that names the slice — the reason it stopped. Its tests are not checked: its code is on a `wip/` branch or nowhere
+* no new `TODO`/`FIXME` in the diff without `OPEN-QUESTIONS.md` being touched in the same diff
 
 An `AC-*` counts as belonging to a requirement only where the two IDs sit on the
-same **table row or heading** in the FRS — `### AC-001 (FR-002)`, or a row of the
-Traceability Matrix. A sentence naming several requirements and a span of
-criteria ties nothing: it would let one test stand in for every requirement it
-mentions.
-* no new `TODO`/`FIXME` in the diff without `OPEN-QUESTIONS.md` being touched in the same diff
+same **table row or heading** in the FRS, and the requirement is the one that
+row or heading is about: the first cell of the row that holds a requirement ID,
+or the IDs of a heading before the dash that starts its name —
+`#### AC-001 (FR-002) — назва`. Another requirement mentioned further along — in
+a description, in a *Related* column — ties nothing, and neither does a sentence
+naming several requirements and a span of criteria: either would let one test
+stand in for every requirement it mentions.
 
 **Owner-checked** — you state plainly whether each holds, and I decide:
 
@@ -277,12 +288,21 @@ That second list is short deliberately. Every unfalsifiable line added to it mak
 
 ### If the slice could not be finished
 
-Do not leave the session half-done:
+Do not leave the session half-done, and never leave `main` half-working:
 
 1. Say plainly what did not work and where you stopped.
-2. Set the slice status back to `TODO` (or `BLOCKED` with a reason).
-3. Unfinished code goes to a `wip/<fr-id>-<slice>` branch, or is not committed at all. `main` is never left in a half-working state.
-4. Record the reason for the block in `OPEN-QUESTIONS.md`.
+2. Unfinished code does not reach `main`. Commit it to `wip/<fr-id>-<slice>` —
+   `git switch -c` takes the working tree along; stage only the code — or leave
+   it uncommitted and say so.
+3. If only the session ran out and nothing blocks the slice, set its status back
+   to `TODO` and stop here: the `wip/` branch is the record, and the next
+   `/slice-start` finds it.
+4. If something blocks it, then on `main`: the slice's `**Статус:**` set to
+   `BLOCKED` with the reason, an entry in `OPEN-QUESTIONS.md` that names the
+   slice, and a Progress Log row with `BLOCKED`. Run `scripts/check-slice.py
+   <SLICE-ID>` and show its output.
+5. After my OK, commit those docs alone, on `main`:
+   `docs: FR-014 SLICE-005 blocked, OQ-007`.
 
 ---
 
@@ -452,43 +472,54 @@ What holds on every platform:
   `ARCHITECTURE.md` names what replaces it: halting a staged rollout, a fix
   release, a server-side switch.
 
-A release is a `TASK-*` of its own, and it is the one task with exactly two
-commits: one before the deploy, one after it. The outcome of a deploy does not
+A release is a `TASK-*` of its own, marked `**Тип:** release` in its block —
+that field is how the cycle commands tell it from other tasks — and it is the
+one task with exactly two commits: one before the deploy, one after it. The outcome of a deploy does not
 exist until the deploy has run, so a single commit would have to either claim
 it in advance or leave it out. The one-commit rule of the *Work cycle* does not
 apply to a release task; nothing else is exempt from it. The cycle commands
 (`/slice-start`, `/slice-finish`) do not run a release task — this list does.
 On my deploy command:
 
-1. The release task already exists in *Tech Tasks* of `BACKLOG.md`. If it does
-   not, propose it — that is a change to `BACKLOG.md` and needs my yes. Never
-   choose its number yourself.
+1. The release task already exists in *Tech Tasks* of `BACKLOG.md`, with
+   `**Тип:** release`. If it does not, propose it — that is a change to
+   `BACKLOG.md` and needs my yes. Never choose its number yourself.
 2. A change to `deploy/` is not part of the release. It is a `TASK-*` of its
    own, finished, run locally and committed before the release starts — never
    edited mid-deploy.
 3. Run the local verification command — UI tests included — on the current
    commit, with a clean working tree, and show the real output. The artifact
    carries no tests, so it is the commit that gets verified, not the artifact.
-   Red means no deploy and no runbook.
+   Red means no deploy and no runbook. A release to prod that ships the
+   artifact already released to test (step 6) builds nothing, so it verifies
+   nothing new: it names the test release's runbook commit and the
+   verification recorded there — running the command on today's commit would
+   check code that is not shipping.
 4. Update `docs/DEPLOY.md` for this release: the hash of the commit verified in
    step 3 and the verification that ran on it, taken from the output you have
-   just shown — never written ahead of it. Post-deploy checks go in as checks
-   to run, not as results. Show it as a diff and wait for my yes.
+   just shown — never written ahead of it; for prod, also which test release
+   the artifact comes from. Post-deploy checks go in as checks to run, not as
+   results. Show it as a diff and wait for my yes.
 5. First commit: `DEPLOY.md`, the task set to `IN PROGRESS`, a Progress Log
    row — `docs: TASK-0XX release 1.2 runbook`. It touches only `docs/`; if
    anything outside `docs/` changed since step 3, the verification no longer
    covers it — go back to step 3.
-6. Only then deploy, by the rules above. The artifact is built from this
-   runbook commit, not by checking out the verified one: the two differ only
-   in `docs/`, and you show that — `git diff --stat <verified> HEAD -- .
-   ':!docs'` prints nothing. For prod, the section of `DEPLOY.md`
-   on a failed release is the plan that must be stated before launch.
+6. Only then deploy, by the rules above. A release to test builds the artifact
+   from this runbook commit, not by checking out the verified one: the two
+   differ only in `docs/`, and you show that — `git diff --stat <verified> HEAD
+   -- . ':!docs'` prints nothing. A release to prod builds nothing: it ships
+   the artifact that went to test, as `DEPLOY.md` names it. If that artifact
+   cannot be identified, stop — a rebuild is a new artifact that test never
+   saw. Where `ARCHITECTURE.md` has no test environment, the prod release
+   builds its artifact the way a test release would. For prod, the section of
+   `DEPLOY.md` on a failed release is the plan that must be stated before
+   launch.
 7. Run the post-deploy checks from `DEPLOY.md` and show the real output. If the
    deploy or the checks fail, stop and tell me. Whatever `DEPLOY.md` says to do
    on failure — a rollback, halting a rollout — is a deploy too: it runs on my
    command.
 8. Second commit, after my OK: the task set to `DONE` — or to `BLOCKED`, with
-   an entry in `OPEN-QUESTIONS.md`, if the release was rolled back, halted or
+   an entry in `OPEN-QUESTIONS.md` that names the task, if the release was rolled back, halted or
    abandoned — and a Progress Log row: `docs: TASK-0XX release 1.2 deployed`
    (or what happened instead: `rolled back`, `halted`) whose status column is
    the task's new status. Run `scripts/check-slice.py TASK-0XX` before this

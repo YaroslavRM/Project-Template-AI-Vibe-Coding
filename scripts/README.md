@@ -17,14 +17,18 @@ python3 scripts/check-template.py --fix --i-know-what-im-doing # оновити 
 `check-template.py` і `check-ids.py` запускаються автоматично з
 `.githooks/pre-commit`. Усі три потребують лише Python 3, без залежностей.
 
-## Що саме читається в `source/`
+## Що саме читається в `source/` і `deploy/`
 
 `check-ids.py` і `check-slice.py` беруть список файлів не обходом папки, а в
 git:
 
 ```bash
-git ls-files -z --cached --others --exclude-standard -- source
+git ls-files -z --cached --others --exclude-standard -- source deploy
 ```
+
+`deploy/` — бо вимогу, яку реалізує інструмент релізу (бекап, міграція),
+тестують поруч зі скриптом, а не в коді застосунку. `check-ids.py`
+окремо звіряє з FRS ще й ID у `docs/ADR/*.md`.
 
 Тобто відстежувані файли плюс невідстежувані, яких не виключає `.gitignore`.
 Це і є «власний код проєкту», і воно не потребує супроводу під кожен стек:

@@ -136,8 +136,13 @@ ENV_TOKEN = re.compile(r"(?<![A-Za-z0-9_])\.env[A-Za-z0-9_.-]*")
 # `.{env,gitignore}` both expand to `.env`. The second lookbehind also
 # excludes `*`, `?` and `]`, so `ls *.{py,md}` is an ordinary glob and not a
 # dotfile.
+#
+# Only a literal prefix of `.env` — `.e`, `.en`, `.env` — followed by a glob
+# character can expand onto it. The earlier pattern let any letters sit
+# between `.e` and the glob, so `git add .eslintrc.{js,json}` was refused as
+# a secret, though it can only ever expand to the two eslint files.
 ENV_GLOB = re.compile(
-    r"(?<![A-Za-z0-9_])\.e[A-Za-z0-9_.*?\[\]{},-]*[*?\[{]"
+    r"(?<![A-Za-z0-9_])\.e(?:nv?)?[*?\[{]"
     r"|(?<![A-Za-z0-9_*?\]])\.\{"
 )
 # Mirror of the Read deny rules in settings.json that the Bash tool does not
@@ -208,20 +213,33 @@ PROTECTED = (
     MANIFEST,
 )
 # Commands that only read, run, or merely name the file. `sed` and `perl` are
-# here only without an in-place flag. An interpreter with an inline program
-# (`python -c`, `node -e`) is not: that is the one form where the path in the
-# text is an argument to open(), not a script to run. `for`, `echo`, `test`
-# name a path without touching it; a redirect on the same segment is still
-# caught by PROTECTED_REDIRECT.
+# here only without an in-place flag, and so are the other readers that can
+# write: `sort -o`, `awk -i inplace`, `git diff --output`. `uniq` is not here
+# at all — its second operand is an output file. An interpreter with an
+# inline program (`python -c`, `node -e`) is not: that is the one form where
+# the path in the text is an argument to open(), not a script to run. `for`,
+# `echo`, `test` name a path without touching it; a redirect on the same
+# segment is still caught by PROTECTED_REDIRECT.
 PROTECTED_READ = re.compile(
-    r"^(?:cat|head|tail|less|more|wc|grep|rg|diff|ls|stat|file|sort|uniq|cut|awk"
+    r"^(?:cat|head|tail|less|more|wc|grep|rg|diff|ls|stat|file|cut"
     r"|for|echo|printf|test|\["
-    r"|sha256sum|shasum|md5sum|git\s+(?:diff|show|log|status|ls-files|blame|add|commit)"
+    r"|sha256sum|shasum|md5sum"
+    r"|git\s+(?:diff|show|log)\b(?![\s\S]*--output)"
+    r"|git\s+(?:status|ls-files|blame|add|commit)"
+    r"|sort\b(?![\s\S]*\s(?:-[A-Za-z]*o|--output))"
+    r"|awk\b(?![\s\S]*\s(?:-i|--include)\b)"
     r"|(?:sed|perl)\b(?![\s\S]*\s-[A-Za-z]*i|[\s\S]*--in-place)"
     r"|(?:python3?|py|bash|sh)\b(?![\s\S]*\s-[ce]\b))\b"
 )
 PROTECTED_REDIRECT = re.compile(r">>?\s*[^\s;&|]*(?:" + "|".join(re.escape(p) for p in PROTECTED) + ")")
 CP_HEAD = re.compile(r"^cp\b")
+# Directories that hold a pinned file. `cp x scripts` writes scripts/x exactly
+# as `cp x scripts/` does, and nothing in the text says `scripts` is a
+# directory — so these are known by name. A path to the project given in
+# another spelling (absolute, via a variable) is not recognised; that is the
+# limit stated at the top of this file, and the Stop hook still sees the
+# result.
+PINNED_DIRS = ("scripts", ".githooks", ".claude", ".claude/hooks")
 # What stands in front of the command word without being one: shell keywords
 # of a loop or a condition, and the opening of a `$(...)` or a subshell. The
 # segment splitter cuts `for …; do h=$(grep x scripts/integrity.sha256 | …)`
@@ -238,18 +256,87 @@ def _names_protected(token: str) -> bool:
     return any(p in token for p in PROTECTED)
 
 
+def _cp_destinations(args: list[str]) -> list[str]:
+    """The paths a `cp` writes, as far as the text tells.
+
+    The last operand is the destination only when it is a file. Into a
+    directory — `cp x .`, `cp x scripts/`, `cp -t .claude x`, or several
+    sources — cp writes <directory>/<name of each source>, and checking only
+    the last operand let `cp tmpBin/check-ids.py scripts/` overwrite a pinned
+    script unasked.
+    """
+    target: str | None = None
+    operands: list[str] = []
+    it = iter(args)
+    for a in it:
+        if a in ("-t", "--target-directory"):
+            target = next(it, "")
+        elif a.startswith("--target-directory="):
+            target = a.split("=", 1)[1]
+        elif a.startswith("--"):
+            continue
+        elif a.startswith("-"):
+            if "t" in a[1:]:  # -t inside a cluster: `cp -rt scripts x`
+                target = next(it, "")
+        else:
+            operands.append(a)
+    if target is not None:
+        return [_into(target, s) for s in operands]
+    if len(operands) < 2:
+        return operands
+    *sources, dest = operands
+    if len(sources) > 1 or _looks_like_dir(dest):
+        return [_into(dest, s) for s in sources]
+    return [dest]
+
+
+def _looks_like_dir(path: str) -> bool:
+    p = _slash(path.strip("\"'"))
+    if p.endswith("/") or p in (".", ".."):
+        return True
+    while p.startswith("./"):
+        p = p[2:]
+    return any(p == d or p.endswith("/" + d) for d in PINNED_DIRS)
+
+
+def _into(directory: str, source: str) -> str:
+    return _slash(directory).rstrip("/") + "/" + _slash(source).rsplit("/", 1)[-1]
+
+
+def _cp_pinned_target(plain: str, named: str | None) -> str | None:
+    """The pinned path a cp writes, or None when it writes none.
+
+    Decided before the "does the text name a pinned file" test, not after it:
+    `cp -t .claude x/settings.json` never spells `.claude/settings.json` — the
+    pinned path exists only once the directory and the file name are joined.
+    A destination the text cannot resolve (a variable, a backtick) fails
+    closed, but only when a pinned name is in the command at all; tmpBin/ is
+    the agent's own scratch and may hold copies.
+    """
+    for dest in _cp_destinations(plain.split()[1:]):
+        if _under_tmpbin(dest, False):
+            continue
+        hit = next((p for p in PROTECTED if p in dest), None)
+        if hit:
+            return hit
+        if named and ("$" in dest or "`" in dest):
+            return named
+    return None
+
+
 def manifest_violation(segs: list[str]) -> str | None:
     for seg in segs:
         plain = INPUT_REDIRECT.sub("", LEAD.sub("", unquoted(seg))).strip()
         hit = next((p for p in PROTECTED if p in plain), None)
-        if hit is None:
+        if CP_HEAD.match(plain):
+            # `cp <pinned> elsewhere` is a read of the pinned file; what must
+            # not be pinned is where it writes.
+            hit = _cp_pinned_target(plain, hit)
+            if hit is None:
+                continue
+        elif hit is None:
             continue
-        if PROTECTED_READ.match(plain) and not PROTECTED_REDIRECT.search(plain):
-            continue
-        # `cp <pinned> elsewhere` is a read of the pinned file; the last
-        # argument is the destination, and it is that one that must not be
-        # pinned.
-        if CP_HEAD.match(plain) and not _names_protected(plain.split()[-1]):
+        elif PROTECTED_READ.match(plain) and not PROTECTED_REDIRECT.search(plain):
             continue
         if hit == MANIFEST:
             return (
@@ -569,9 +656,16 @@ ASK_RULES: list[tuple[re.Pattern[str], str]] = [
         ASK_MESSAGE,
     ),
 ]
+# The runner must be the command the segment runs — directly, by path, or
+# through npx / pnpm / yarn / bunx / npm exec — not merely a word in it:
+# `git log --grep=jest -u` is a patch listing, not a regeneration.
 ASK_PER_SEGMENT: list[tuple[re.Pattern[str], str]] = [
     (
-        re.compile(r"\b(?:playwright|jest|vitest)\b[\s\S]*?\s(?:-u|--update)(?![\w-])"),
+        re.compile(
+            r"^(?:\w+=\S*\s+)*"
+            r"(?:(?:npx|bunx|pnpm|yarn)\s+(?:-\S+\s+)*(?:exec\s+|dlx\s+)?|npm\s+exec\s+)?"
+            r"(?:\S*/)?(?:playwright|jest|vitest)\b[\s\S]*?\s(?:-u|--update)(?![\w-])"
+        ),
         ASK_MESSAGE,
     ),
 ]
@@ -598,10 +692,15 @@ PER_SEGMENT: list[tuple[re.Pattern[str], str]] = [
         "the owner before discarding anything.",
     ),
     (
+        # `git switch` is where the checkout rule above sends the agent, and
+        # its -f / --discard-changes throw away uncommitted work exactly like
+        # `checkout --` does. Plain switch refuses to, so it stays allowed.
         re.compile(
             r"^git\s+(?:reset\s+--hard\b"
             r"|clean\s+[\s\S]*?(?:-[A-Za-z]*[fd][A-Za-z]*|--force\b)"
             r"|stash\s+(?:drop|clear)\b"
+            r"|switch\b[\s\S]*?(?:\s--discard-changes\b|\s--force(?![\w-])"
+            r"|\s-[A-Za-z]*f[A-Za-z]*\b)"
             r"|restore\s+(?![\s\S]*?--staged\b))"
         ),
         "this discards uncommitted work irreversibly. Ask first.",

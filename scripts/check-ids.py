@@ -43,7 +43,9 @@ BACKLOG = ROOT / "docs/BACKLOG.md"
 ARCH = ROOT / "docs/ARCHITECTURE.md"
 DEPLOY = ROOT / "docs/DEPLOY.md"
 ADR_DIR = ROOT / "docs/ADR"
-SOURCE = ROOT / "source"
+# The same places check-slice.py reads test names from: the application and
+# the release tooling. An ID invented in either is the same mistake.
+CODE_ROOTS = ("source", "deploy")
 
 REQ_ID = re.compile(r"\b(?:FR|DR|NFR|IR|BR)-\d{3}\b")
 AC_ID = re.compile(r"\bAC-\d{3}\b")
@@ -92,7 +94,7 @@ def git_out(*args: str) -> str | None:
 
 
 def source_files() -> list[Path]:
-    """Files under source/ that belong to the project.
+    """Files under source/ and deploy/ that belong to the project.
 
     The list comes from git: tracked files, plus untracked ones that .gitignore
     does not exclude. This runs on every commit, so the cost matters — but the
@@ -100,14 +102,15 @@ def source_files() -> list[Path]:
     `AC-123` that happens to appear in a vendored package or its changelog used
     to be reported as an invented ID and blocked the commit.
     """
-    if not SOURCE.is_dir():
+    roots = [r for r in CODE_ROOTS if (ROOT / r).is_dir()]
+    if not roots:
         return []
     listing = git_out(
-        "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "source"
+        "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", *roots
     )
     if listing is None:
         print("WARN:  git unavailable — falling back to the SKIP_DIRS name list")
-        candidates = list(SOURCE.rglob("*"))
+        candidates = [p for r in roots for p in (ROOT / r).rglob("*")]
     else:
         # A merge conflict lists the same path once per stage; dedupe, keep order.
         candidates = [ROOT / rel for rel in dict.fromkeys(listing.split("\0")) if rel]
@@ -171,6 +174,19 @@ if DEPLOY.is_file():
     deploy_text = read(DEPLOY)
     report("requirement IDs", set(REQ_ID.findall(deploy_text)) - frs_reqs, "docs/DEPLOY.md")
     report("acceptance criteria", set(AC_ID.findall(deploy_text)) - frs_acs, "docs/DEPLOY.md")
+
+# ADRs are written in the step-2 chat, which cannot see the FRS file — the
+# same place an invented ID is born — and their "Пов'язані вимоги" field is
+# exactly a list of IDs. The template file is skipped: its FR-XXX is a
+# placeholder, and a project may keep it.
+if ADR_DIR.is_dir():
+    for adr in sorted(ADR_DIR.glob("*.md")):
+        if adr.name == "ADR-000-template.md":
+            continue
+        adr_text = read(adr)
+        where = f"docs/ADR/{adr.name}"
+        report("requirement IDs", set(REQ_ID.findall(adr_text)) - frs_reqs, where)
+        report("acceptance criteria", set(AC_ID.findall(adr_text)) - frs_acs, where)
 
 # In source, the same ID is usually spelled FR_014 or FR014: hyphens are not
 # valid in identifiers, and the rules ask for the ID in the test name.

@@ -28,7 +28,7 @@ jobs:
       # рядок, і воно видно в diff.
       - name: Manifest pin
         run: |
-          expected="98a9b4825805e120df862462a2c5990ea42877bf43bd32fbf167d8df7fa5bb40"
+          expected="aa0e24a61756218aaa01680daaef8406562c4fa98fd671e893b84e624b78628e"
           actual=$(sha256sum scripts/integrity.sha256 | cut -d' ' -f1)
           if [ "$expected" != "$actual" ]; then
             echo "scripts/integrity.sha256 змінився, а пін у цьому workflow — ні."
@@ -59,6 +59,10 @@ jobs:
       # будь-який його обхід) клав у main коміт без ID, а CI був зелений.
       # Ті самі два grep -E, що в хуку. Merge-коміти виключено (--no-merges) —
       # у хуку це MERGE_HEAD; Revert звільнено від типу, але не від ID.
+      # Кореневий коміт виключено (--min-parents=1): у проєкті, створеному
+      # через «Use this template», його пише GitHub, з темою «Initial commit»,
+      # і перший же прогін CI був червоним без жодної помилки власника.
+      # Переписати його можна лише force-push-ем — гірше за будь-який обхід.
       - name: Commit subjects
         env:
           BEFORE: ${{ github.event.before }}
@@ -88,7 +92,7 @@ jobs:
             if ! printf '%s' "$msg" | grep -qE '(^|[^A-Za-z0-9-])(FR|DR|NFR|IR|TASK|SLICE)-[0-9]{3}([^0-9-]|$)'; then
               echo "немає ID вимоги або задачі в темі коміту: $msg"; fail=1
             fi
-          done < <(git log --no-merges --format=%s $range)
+          done < <(git log --no-merges --min-parents=1 --format=%s $range)
           if [ "$fail" != 0 ]; then
             echo "Клієнтський commit-msg це ловить; --no-verify його зняв. Виправ теми (rebase) — CI не приймає коміт без ID."
             exit 1
